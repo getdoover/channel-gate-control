@@ -1,0 +1,41 @@
+services:
+  device_agent:
+    image: spaneng/doover_device_agent:apps
+    network_mode: host
+
+  platform_iface:
+    image: spaneng/doover_platform_iface
+    network_mode: host
+    entrypoint: python3 -u platform_iface.py --type=sim
+
+  gate_simulator:
+    build: sample
+    network_mode: host
+    restart: unless-stopped
+    depends_on:
+      device_agent:
+        condition: service_healthy
+    environment:
+      - APP_KEY=sim_app_key
+      - HEALTHCHECK_PORT=49201
+      - CONTROL_APP_KEY=test_app_key
+      - TRAVEL_MM=1000
+      - RATE_MM_S=80
+      - START_MM=400
+
+  channel_gate_control:
+    build: ../
+    network_mode: host
+    restart: unless-stopped
+    depends_on:
+      device_agent:
+        condition: service_healthy
+      gate_simulator:
+        condition: service_healthy
+    environment:
+      - APP_KEY=test_app_key
+      - CONFIG_FP=/app_config.json
+      - HEALTHCHECK_PORT=49202
+    volumes:
+      - ./app_config.json:/app_config.json
+      - /etc/localtime:/etc/localtime:ro

@@ -1,0 +1,25 @@
+name: Run Linting
+
+on:
+  workflow_call:
+
+
+jobs:
+  run_tests:
+    name: Run Linting
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    # this might use `doover app lint` in the future.
+    - name: Install the code linting and formatting tool Ruff
+      run: pipx install ruff
+    - name: Lint code with Ruff
+      run: ruff check --output-format=github --target-version=py311
+      continue-on-error: true
+    - name: Check code formatting with Ruff
+      run: ruff format --diff --target-version=py311
+      continue-on-error: true

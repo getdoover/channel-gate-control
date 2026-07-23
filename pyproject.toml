@@ -1,0 +1,33 @@
+[project]
+name = "channel-gate-control"
+version = "0.1.0"
+description = "Closed-loop height control of a hydraulic channel gate: an operator slider sets a target height, the app reads gate height from the channel gate encoder and drives two interlocked solenoid valves (raise/lower) to seek it."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pydoover>=1.9.1",
+]
+
+[project.scripts]
+doover-app-run = "channel_gate_control:main"
+export-config = "channel_gate_control.app_config:export"
+export-ui = "channel_gate_control.app_ui:export"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[dependency-groups]
+dev = [
+    "aiohttp>=3.11.18",
+    "grpcio==1.67.0",
+    "protobuf==5.28.2",
+    "pytest>=8.3.5",
+    "pytest-asyncio>=0.26.0",
+    "requests>=2.32.3",
+]

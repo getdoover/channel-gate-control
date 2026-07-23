@@ -1,0 +1,30 @@
+name: Validate Schemas
+
+on:
+  workflow_call:
+
+jobs:
+  validate_schemas:
+    name: Validate Config & UI Schemas
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Doover CLI
+        run: uv tool install doover-cli
+
+      - name: Validate config schema
+        run: doover config-schema validate
+
+      - name: Validate UI schema
+        run: doover ui-schema validate

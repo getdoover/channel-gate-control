@@ -1,0 +1,19 @@
+{
+    "height_app_key": "sim_app_key",
+    "height_tag_name": "Height",
+    "height_min_mm": 0.0,
+    "height_max_mm": 1000.0,
+    "raise_do_pin": 0,
+    "lower_do_pin": 1,
+    "do_active_low": false,
+    "deadband_mm": 5.0,
+    "hysteresis_mm": 5.0,
+    "control_period_s": 0.25,
+    "outputs_enabled": true,
+    "move_timeout_s": 30.0,
+    "stall_window_s": 4.0,
+    "stall_min_progress_mm": 3.0,
+    "pump_do_pin": 2,
+    "estop_di_pin": 3,
+    "estop_active_low": false
+}

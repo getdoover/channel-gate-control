@@ -1,0 +1,492 @@
+{
+    "channel_gate_control": {
+        "name": "channel_gate_control",
+        "display_name": "Channel Gate Control",
+        "type": "DEV",
+        "visibility": "PUB",
+        "allow_many": true,
+        "description": "Closed-loop height control of a hydraulic channel gate: a slider sets a target height, the app reads gate height from the channel gate encoder and drives two interlocked solenoid valves (raise/lower) to seek it.",
+        "long_description": "README.md",
+        "depends_on": [],
+        "owner_org_key": "",
+        "image_name": "ghcr.io/getdoover/channel-gate-control:main",
+        "build_args": "--platform linux/amd64,linux/arm64",
+        "config_schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$id": "",
+            "title": "$default",
+            "type": "object",
+            "properties": {
+                "height_app_key": {
+                    "title": "Gate Height Source App",
+                    "x-name": "height_app_key",
+                    "x-hidden": false,
+                    "format": "doover-application",
+                    "type": "string",
+                    "x-required": true,
+                    "description": "The channel gate encoder app INSTALL on this device that publishes the gate height. Its 'Height' tag (mm) is read as the control feedback.",
+                    "x-position": 0
+                },
+                "height_tag_name": {
+                    "title": "Gate Height Tag",
+                    "x-name": "height_tag_name",
+                    "x-hidden": false,
+                    "type": [
+                        "string",
+                        "null"
+                    ],
+                    "x-required": false,
+                    "description": "Name of the tag carrying gate height in mm on the source app. The channel gate encoder publishes this as 'Height'.",
+                    "default": "Height",
+                    "x-position": 1
+                },
+                "require_homed": {
+                    "title": "Require Encoder Homed",
+                    "x-name": "require_homed",
+                    "x-hidden": false,
+                    "type": [
+                        "boolean",
+                        "null"
+                    ],
+                    "x-required": false,
+                    "description": "Hold the outputs off until the source app's 'Homed' tag is true. The encoder's height is incremental and unverified until it has homed against its limit switch, so driving on an unhomed height can move the gate to the wrong position. Disable only for height sources that don't publish a 'Homed' tag.",
+                    "default": true,
+                    "x-position": 2
+                },
+                "heartbeat_timeout_s": {
+                    "title": "Heartbeat Timeout (s)",
+                    "x-name": "heartbeat_timeout_s",
+                    "x-hidden": false,
+                    "type": [
+                        "number",
+                        "null"
+                    ],
+                    "x-required": false,
+                    "description": "Treat the height as stale (and hold outputs) if the source app's 'Heartbeat' tag hasn't advanced within this long. Guards against a dead/frozen encoder while the gate sits at target. 0 disables.",
+                    "default": 15.0,
+                    "x-position": 3,
+                    "minimum": 0
+                },
+                "height_min_mm": {
+                    "title": "Minimum Height (mm)",
+                    "x-name": "height_min_mm",
+                    "x-hidden": false,
+                    "type": [
+                        "number",
+                        "null"
+                    ],
+                    "x-required": false,
+                    "description": "Gate height at the fully-lowered/closed end of travel. The target slider cannot be set below this.",
+                    "default": 0.0,
+                    "x-position": 4
+                },
+                "height_max_mm": {
+                    "title": "Maximum Height (mm)",
+                    "x-name": "height_max_mm",
+                    "x-hidden": false,
+                    "type": [
+                        "number",
+                        "null"
+                    ],
+                    "x-required": false,
+                    "description": "Gate height at the fully-raised/open end of travel. The target slider cannot be set above this.",
+                    "default": 1000.0,
+                    "x-position": 5
+                },
+                "raise_do_pin": {
+                    "title": "Raise Solenoid DO Pin",
+                    "x-name": "raise_do_pin",
+                    "x-hidden": false,
+                    "type": [
+                        "integer",
+                        "null"
+                    ],
+                    "x-required": false,
+                    "description": "Digital output driving the RAISE (open / lift) hydraulic solenoid. Leave unset to disable raising.",
+                    "default": null,
+                    "x-position": 6,
+                    "minimum": 0
+                },
+                "lower_do_pin": {
+                    "title": "Lower Solenoid DO Pin",
+                    "x-name": "lower_do_pin",
+                    "x-hidden": false,
+                    "type": [
+                        "integer",
+                        "null"
+                    ],
+                    "x-required": false,
+                    "description": "Digital output driving the LOWER (close / drop) hydraulic solenoid. Leave unset to disable lowering.",
+                    "default": null,
+                    "x-position": 7,
+                    "minimum": 0
+                },
+                "pump_do_pin": {
+                    "title": "Pump DO Pin",
+                    "x-name": "pump_do_pin",
+                    "x-hidden": false,
+                    "type": [
+                        "integer",
+                        "null"
+                    ],
+                    "x-required": false,
+                    "description": "Digital output driving the hydraulic pump. Energised whenever either directional solenoid is energised, de-energised otherwise - without it the gate cannot move. Leave unset if no pump output is wired.",
+                    "default": null,
+                    "x-position": 8,
+                    "minimum": 0
+                },
+                "do_active_low": {
+                    "title": "Outputs Active Low",
+                    "x-name": "do_active_low",
+                    "x-hidden": false,
+                    "type": [
+                        "boolean",
+                        "null"
+                    ],
+                    "x-required": false,
+                    "description": "Set if a solenoid energises when its DO is driven LOW (e.g. sinking relay boards). Default: energise on HIGH.",
+                    "default": false,
+                    "x-position": 9
+                },
+                "deadband_mm": {
+                    "title": "Deadband (mm)",
+                    "x-name": "deadband_mm",
+                    "x-hidden": false,
+                    "type": [
+                        "number",
+                        "null"
+                    ],
+                    "x-required": false,
+                    "description": "Stop driving once the gate is within this distance of the target. Too small hunts around the setpoint; too large parks short.",
+                    "default": 5.0,
+                    "x-position": 10,
+                    "minimum": 0
+                },
+                "hysteresis_mm": {
+                    "title": "Re-engage Hysteresis (mm)",
+                    "x-name": "hysteresis_mm",
+                    "x-hidden": false,
+                    "type": [
+                        "number",
+                        "null"
+                    ],
+                    "x-required": false,
+                    "description": "Extra margin beyond the deadband before a *stopped* gate starts moving again. Stops the solenoids chattering when the gate drifts slightly off target. Re-engage error = deadband + hysteresis.",
+                    "default": 5.0,
+                    "x-position": 11,
+                    "minimum": 0
+                },
+                "control_period_s": {
+                    "title": "Control Period (s)",
+                    "x-name": "control_period_s",
+                    "x-hidden": false,
+                    "type": [
+                        "number",
+                        "null"
+                    ],
+                    "x-required": false,
+                    "description": "How often the control loop evaluates height and drives the outputs. 0.2-0.5 s suits hydraulic gate control.",
+                    "default": 0.25,
+                    "x-position": 12,
+                    "minimum": 0.05
+                },
+                "estop_di_pin": {
+                    "title": "Top Limit E-Stop DI Pin",
+                    "x-name": "estop_di_pin",
+                    "x-hidden": false,
+                    "type": [
+                        "integer",
+                        "null"
+                    ],
+                    "x-required": false,
+                    "description": "Digital input from the over-travel proximity sensor at the TOP of the gate. When it triggers, the pump and both solenoids are de-energised immediately and a fault latches (operator Reset required). While it stays triggered, raising is hard-blocked but lowering is allowed so the gate can be recovered off the limit. Leave unset if not fitted.",
+                    "default": null,
+                    "x-position": 13,
+                    "minimum": 0
+                },
+                "estop_active_low": {
+                    "title": "E-Stop Active Low",
+                    "x-name": "estop_active_low",
+                    "x-hidden": false,
+                    "type": [
+                        "boolean",
+                        "null"
+                    ],
+                    "x-required": false,
+                    "description": "Set for normally-closed proximity sensors that pull the input LOW when the gate reaches the top limit (the falling edge triggers the stop). Clear for normally-open sensors.",
+                    "default": true,
+                    "x-position": 14
+                },
+                "outputs_enabled": {
+                    "title": "Outputs Enabled",
+                    "x-name": "outputs_enabled",
+                    "x-hidden": false,
+                    "type": [
+                        "boolean",
+                        "null"
+                    ],
+                    "x-required": false,
+                    "description": "Master enable. When off, both solenoids are held de-energised regardless of the setpoint or mode.",
+                    "default": true,
+                    "x-position": 15
+                },
+                "move_timeout_s": {
+                    "title": "Move Timeout (s)",
+                    "x-name": "move_timeout_s",
+                    "x-hidden": false,
+                    "type": [
+                        "number",
+                        "null"
+                    ],
+                    "x-required": false,
+                    "description": "Maximum time a solenoid may be energised in a single continuous move before the app faults and stops. Set to the realistic full-travel time plus margin. 0 disables.",
+                    "default": 30.0,
+                    "x-position": 16,
+                    "minimum": 0
+                },
+                "stall_window_s": {
+                    "title": "Stall Window (s)",
+                    "x-name": "stall_window_s",
+                    "x-hidden": false,
+                    "type": [
+                        "number",
+                        "null"
+                    ],
+                    "x-required": false,
+                    "description": "While moving, the gate must make progress within this window or the app faults (jam, dead encoder, or reversed wiring). 0 disables stall detection.",
+                    "default": 4.0,
+                    "x-position": 17,
+                    "minimum": 0
+                },
+                "stall_min_progress_mm": {
+                    "title": "Stall Min Progress (mm)",
+                    "x-name": "stall_min_progress_mm",
+                    "x-hidden": false,
+                    "type": [
+                        "number",
+                        "null"
+                    ],
+                    "x-required": false,
+                    "description": "Minimum height change, in the commanded direction, expected within each stall window while moving.",
+                    "default": 3.0,
+                    "x-position": 18,
+                    "minimum": 0
+                }
+            },
+            "additionalElements": true,
+            "required": [
+                "height_app_key"
+            ]
+        },
+        "ui_schema": {
+            "displayString": "$config.app().APP_DISPLAY_NAME",
+            "hidden": "$config.app().hidden:boolean:false:boolean:false",
+            "position": "$config.app().dv_app_position:number:100",
+            "icon": null,
+            "colour": null,
+            "defaultOpen": "$config.app().dv_app_default_open:boolean",
+            "type": "uiApplication",
+            "name": "$config.app().APP_KEY",
+            "children": {
+                "target": {
+                    "name": "target",
+                    "type": "uiSlider",
+                    "displayString": "Target Height (mm)",
+                    "position": 51,
+                    "hidden": false,
+                    "currentValue": "$cmds.app().target::0",
+                    "default": 0,
+                    "min": 0,
+                    "max": 1000,
+                    "stepSize": 1,
+                    "dualSlider": false,
+                    "isInverted": false
+                },
+                "mode": {
+                    "name": "mode",
+                    "type": "uiSelect",
+                    "displayString": "Control Mode",
+                    "position": 52,
+                    "hidden": false,
+                    "currentValue": "$cmds.app().mode::hold",
+                    "default": "hold",
+                    "options": {
+                        "hold": {
+                            "name": "hold",
+                            "displayString": "Hold",
+                            "type": "uiElement"
+                        },
+                        "auto": {
+                            "name": "auto",
+                            "displayString": "Auto",
+                            "type": "uiElement"
+                        }
+                    }
+                },
+                "height": {
+                    "name": "height",
+                    "type": "uiVariable",
+                    "displayString": "Gate Height (mm)",
+                    "showActivity": true,
+                    "position": 53,
+                    "hidden": false,
+                    "varType": "float",
+                    "currentValue": "$tag.app().GateHeight:number:0.0",
+                    "decPrecision": 1,
+                    "live": true
+                },
+                "target_readout": {
+                    "name": "target_readout",
+                    "type": "uiVariable",
+                    "displayString": "Target (mm)",
+                    "showActivity": true,
+                    "position": 54,
+                    "hidden": false,
+                    "varType": "float",
+                    "currentValue": "$tag.app().TargetHeight:number:0.0",
+                    "decPrecision": 1,
+                    "live": true
+                },
+                "error": {
+                    "name": "error",
+                    "type": "uiVariable",
+                    "displayString": "Error (mm)",
+                    "showActivity": true,
+                    "position": 55,
+                    "hidden": false,
+                    "varType": "float",
+                    "currentValue": "$tag.app().Error:number:0.0",
+                    "decPrecision": 1,
+                    "live": true
+                },
+                "moving": {
+                    "name": "moving",
+                    "type": "uiVariable",
+                    "displayString": "Movement",
+                    "showActivity": true,
+                    "position": 56,
+                    "hidden": false,
+                    "varType": "string",
+                    "currentValue": "$tag.app().Moving:string:\"idle\"",
+                    "live": true
+                },
+                "status": {
+                    "name": "status",
+                    "type": "uiVariable",
+                    "displayString": "Status",
+                    "showActivity": true,
+                    "position": 57,
+                    "hidden": false,
+                    "varType": "string",
+                    "currentValue": "$tag.app().Status:string:\"starting\"",
+                    "live": true
+                },
+                "raise_output": {
+                    "name": "raise_output",
+                    "type": "uiVariable",
+                    "displayString": "Raise Solenoid",
+                    "showActivity": true,
+                    "position": 58,
+                    "hidden": false,
+                    "varType": "bool",
+                    "currentValue": "$tag.app().RaiseOutput:boolean:false",
+                    "live": true
+                },
+                "lower_output": {
+                    "name": "lower_output",
+                    "type": "uiVariable",
+                    "displayString": "Lower Solenoid",
+                    "showActivity": true,
+                    "position": 59,
+                    "hidden": false,
+                    "varType": "bool",
+                    "currentValue": "$tag.app().LowerOutput:boolean:false",
+                    "live": true
+                },
+                "pump_output": {
+                    "name": "pump_output",
+                    "type": "uiVariable",
+                    "displayString": "Pump",
+                    "showActivity": true,
+                    "position": 60,
+                    "hidden": false,
+                    "varType": "bool",
+                    "currentValue": "$tag.app().PumpOutput:boolean:false",
+                    "live": true
+                },
+                "no_signal": {
+                    "name": "no_signal",
+                    "type": "uiWarningIndicator",
+                    "displayString": "No gate height signal - outputs held",
+                    "position": 61,
+                    "hidden": true,
+                    "currentValue": "$cmds.app().no_signal",
+                    "can_cancel": false
+                },
+                "height_untrusted": {
+                    "name": "height_untrusted",
+                    "type": "uiWarningIndicator",
+                    "displayString": "Encoder height not trusted (unhomed/stale) - outputs held",
+                    "position": 62,
+                    "hidden": true,
+                    "currentValue": "$cmds.app().height_untrusted",
+                    "can_cancel": false
+                },
+                "estop": {
+                    "name": "estop",
+                    "type": "uiWarningIndicator",
+                    "displayString": "TOP LIMIT E-STOP - gate at over-travel sensor",
+                    "position": 63,
+                    "hidden": true,
+                    "currentValue": "$cmds.app().estop",
+                    "can_cancel": false
+                },
+                "fault": {
+                    "name": "fault",
+                    "type": "uiWarningIndicator",
+                    "displayString": "FAULT - outputs latched off, press Reset",
+                    "position": 64,
+                    "hidden": true,
+                    "currentValue": "$cmds.app().fault",
+                    "can_cancel": false
+                },
+                "fault_reason": {
+                    "name": "fault_reason",
+                    "type": "uiVariable",
+                    "displayString": "Fault Reason",
+                    "showActivity": true,
+                    "position": 65,
+                    "hidden": false,
+                    "varType": "string",
+                    "currentValue": "$tag.app().FaultReason:string:\"\"",
+                    "live": true
+                },
+                "reset_fault": {
+                    "name": "reset_fault",
+                    "type": "uiButton",
+                    "displayString": "Reset Fault",
+                    "position": 66,
+                    "hidden": false,
+                    "colour": "red",
+                    "currentValue": "$cmds.app().reset_fault"
+                }
+            }
+        },
+        "container_registry_profile_id": 93955828574386692,
+        "organisation_id": null,
+        "id": 205837154096576513,
+        "key": null,
+        "owner_org_id": null,
+        "code_repo_id": null,
+        "repo_branch": "main",
+        "lambda_config": null,
+        "icon_url": null,
+        "banner_url": null,
+        "staging_config": {},
+        "build_widget_command": null,
+        "export_config_command": null,
+        "export_ui_command": null,
+        "run_command": null,
+        "lambda_arn": null
+    }
+}

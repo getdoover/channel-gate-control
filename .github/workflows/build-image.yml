@@ -1,0 +1,168 @@
+name: Test, Lint & Deploy Docker Image
+
+on:
+  push:
+    branches:
+      - main
+
+  pull_request:
+    branches:
+      - main
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  lint:
+    name: Lint Code
+    uses: ./.github/workflows/run-linting.yml
+    secrets: inherit
+
+  test:
+    name: Test Code
+    uses: ./.github/workflows/run-tests.yml
+    secrets: inherit
+
+  validate:
+    name: Validate Schemas
+    uses: ./.github/workflows/validate-schema.yml
+    secrets: inherit
+
+  smoke_test:
+    name: Smoke Test (container runs)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Build the image and load it locally. Catches deps that fail to *install*
+      # (e.g. no musllinux wheel on the alpine base).
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          load: true
+          tags: smoke:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Importing the app package exercises the whole dependency graph (pydoover
+      # and everything resolved from the base). Catches deps that install but fail
+      # to *import* in the container - which unit tests can't, as they don't run
+      # inside the built image. Module derived from the doover-app-run entry point.
+      - name: Import app package inside the container
+        run: |
+          MODULE=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['scripts']['doover-app-run'].split(':')[0])")
+          echo "Importing '$MODULE' inside the container..."
+          docker run --rm --entrypoint python smoke:latest -c "import $MODULE; print('container import OK')"
+
+  push_to_registries:
+    name: Push Docker Image
+    needs: [lint, test, validate, smoke_test]
+    # Runs on pull requests too: the resulting version is published as an alpha
+    # (see the release job) so it never auto-selects as "Latest". Push only when
+    # the checks pass, unless a workflow_dispatch explicitly overrides.
+    if: ${{ (needs.test.result == 'success' && needs.validate.result == 'success' && needs.smoke_test.result == 'success') || (github.event_name == 'workflow_dispatch' && github.event.inputs.confirmation == 'true') }}
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    permissions:
+      packages: write
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+
+      - name: Push Images
+        id: push
+        uses: docker/build-push-action@3b5e8027fcad23fda98b2e3ac259d8d67585f671
+        with:
+          platforms: linux/arm64,linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign image (key-pair, offline-verifiable)
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.DOOVER_PUBLIC_COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ""
+          COSIGN_EXPERIMENTAL: "1"
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          # Sign by digest (covers every tag pointing at this manifest) with
+          # the tlog upload disabled so the app controller can verify fully
+          # offline on edge devices.
+          cosign sign --yes --tlog-upload=false --registry-referrers-mode oci-1-1 \
+            --key env://COSIGN_PRIVATE_KEY \
+            "${REGISTRY}/${IMAGE_NAME}@${DIGEST}"
+
+  release:
+    name: Release to Doover (${{ matrix.environment }})
+    needs: push_to_registries
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false # one environment failing must not block the other
+      matrix:
+        include:
+#          - environment: staging
+#            control_api: https://api.staging.udoover.com
+          - environment: production
+            control_api: https://api.doover.com
+    env:
+      DOOVER_CONTROL_API_BASE_URL: ${{ matrix.control_api }}
+      DOOVER_OIDC_AUDIENCE: ${{ matrix.control_api }}
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Doover CLI
+        run: uv tool install doover-cli
+
+      - name: Publish app metadata to Doover
+        run: doover app publish
+
+      - name: Release a new application version
+        env:
+          RELEASE_NOTES: ${{ github.event.head_commit.message || github.event.pull_request.title }}
+        run: >-
+          doover app release
+          --digest "${{ needs.push_to_registries.outputs.digest }}"
+          --commit "${{ github.event.pull_request.head.sha || github.sha }}"
+          --notes "$RELEASE_NOTES"
+          ${{ github.event_name == 'pull_request' && '--alpha' || '' }}
