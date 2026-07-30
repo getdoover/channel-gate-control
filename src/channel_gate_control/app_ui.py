@@ -10,16 +10,19 @@ class ChannelGateControlUI(ui.UI):
 
     The operator drags ``target`` to the height they want; ``mode`` switches
     between Auto (seek the target) and Hold (outputs off). Below sit the live
-    readouts - actual height, error, which solenoid is driving - and the fault
-    banner with its reset button. Readouts bind to live tags; the slider, mode
-    selector and reset button are command surfaces read/handled by the app.
+    readouts - actual height, error, the height calibration the top limit prox
+    established, which solenoid is driving - then the top-limit warning and the
+    fault banner with its reset button. Readouts bind to live tags; the slider,
+    mode selector and reset button are command surfaces read/handled by the app.
     """
 
     # --- Commands ---------------------------------------------------------
     target = ui.Slider(
         "Target Height (mm)",
         min_val=0,
-        max_val=1000,
+        # Declared span only - setup() replaces both ends with the configured
+        # travel limits, so this matches their defaults (0 .. the prox at 520).
+        max_val=520,
         step_size=1,
         default=0,
         dual_slider=False,
@@ -54,6 +57,12 @@ class ChannelGateControlUI(ui.UI):
         precision=1,
         value=ui.bind_tag(T.Error),
         name="error",
+    )
+    height_offset = ui.NumericVariable(
+        "Height Calibration (mm)",
+        precision=1,
+        value=ui.bind_tag(T.HeightOffset),
+        name="height_offset",
     )
     moving = ui.TextVariable(
         "Movement",
@@ -94,9 +103,9 @@ class ChannelGateControlUI(ui.UI):
         hidden=True,
         can_cancel=False,
     )
-    estop_warning = ui.WarningIndicator(
-        "TOP LIMIT E-STOP - gate at over-travel sensor",
-        name="estop",
+    top_limit_warning = ui.WarningIndicator(
+        "TOP LIMIT - raising blocked, lower the gate off the prox",
+        name="top_limit",
         hidden=True,
         can_cancel=False,
     )

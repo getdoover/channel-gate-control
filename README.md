@@ -41,6 +41,45 @@ the encoder/controller pair: the encoder measures, this app acts.
 Loss of the height signal (`None`) is **not** latched — it holds the outputs off
 and resumes automatically when the signal returns.
 
+### Top limit prox (over-travel guard + height calibration)
+
+An optional proximity sensor at the top of the gate, wired to `estop_di_pin`.
+Normally-open by default (active HIGH); set `estop_active_low` for a
+normally-closed prox. It is **not** a trip — it does three things while it reads
+active:
+
+- **Blocks raising.** The raise solenoid and the pump are held off, enforced at
+  the same output choke point as the interlock, so no code path can drive the
+  gate further up.
+- **Still allows lowering.** The operator can always close the gate off the
+  limit; nothing latches and no Reset is needed. The block lifts by itself on a
+  confirmed inactive reading.
+- **Re-zeros the gate height.** The prox sits at a known point of travel, so
+  arriving there is what calibrates the measurement: the height is offset to read
+  `estop_height_mm` — **520 mm**, the prox's real height on this gate. Whatever
+  the encoder had drifted to, touching the prox pins it back. This happens **once
+  per arrival**, so a gate creeping while parked on the sensor can't keep
+  re-zeroing and hide it. The offset is published as `HeightOffset` and restored
+  on restart.
+
+⚠️ `estop_height_mm` has to agree with the travel limits: heights are measured
+upward from the closed gate, so the datum is the prox's own height (520 mm), not
+`0`. A `0` there would make every position below the prox read negative, outside
+the target slider's span, and the gate could not then be commanded downward.
+`height_max_mm` defaults to the same 520 mm so the slider can't ask for a height
+the prox will refuse to raise to — move the two together if the sensor is
+repositioned.
+
+Detection is **level-driven**: `main_loop` polls the DI every cycle, before any
+control decision, and the pulse-counter edge callback is only a fast path for an
+immediate stop. A failed read holds the last state rather than releasing the
+block. The edge callback reads the pin level back rather than trusting the
+callback's `value`, which pydoover delivers as `False` on every driver.
+
+If the prox is what calibrates this gate, turn `require_homed` **off** —
+otherwise the outputs stay held waiting for the encoder to home and the gate can
+never be driven up to the prox in the first place.
+
 ## Getting started (bench simulator)
 
 The simulator closes the physical loop with no hardware: a small "gate physics"
@@ -68,12 +107,18 @@ until you deliberately switch to Auto.
 |-----|---------|---------|
 | `height_app_key` | — | The channel gate encoder app supplying the height feedback. |
 | `height_tag_name` | `Height` | Tag (mm) read from that app as the actual gate height. |
-| `height_min_mm` / `height_max_mm` | `0` / `1000` | Travel limits — the target slider span. |
+| `require_homed` | `true` | Hold the outputs off until the encoder reports `Homed`. Turn off when the top limit prox is what calibrates the gate. |
+| `heartbeat_timeout_s` | `15` | Treat the height as stale (and hold outputs) if the encoder's `Heartbeat` stops advancing. `0` disables. |
+| `height_min_mm` / `height_max_mm` | `0` / `520` | Travel limits — the target slider span. Keep the top in step with `estop_height_mm`. |
 | `raise_do_pin` / `lower_do_pin` | — | Digital outputs for the raise / lower solenoids. |
+| `pump_do_pin` | — | Digital output for the hydraulic pump; energised whenever either solenoid is. |
 | `do_active_low` | `false` | Set if solenoids energise on a LOW output. |
 | `deadband_mm` | `5` | Stop tolerance around the target. |
 | `hysteresis_mm` | `5` | Extra error before a stopped gate re-engages (anti-chatter). |
 | `control_period_s` | `0.25` | Control-loop period. |
+| `estop_di_pin` | — | Digital input from the top limit prox. Unset ⇒ not fitted. |
+| `estop_active_low` | `false` | Clear for a normally-open prox (active HIGH), set for normally-closed. |
+| `estop_height_mm` | `520` | Gate height the prox sits at — the calibration datum the height is re-zeroed to. |
 | `outputs_enabled` | `true` | Master enable; off ⇒ both solenoids held de-energised. |
 | `move_timeout_s` | `30` | Max continuous energise time per move before faulting. `0` disables. |
 | `stall_window_s` | `4` | Window the gate must show progress within while moving. `0` disables. |
@@ -81,9 +126,9 @@ until you deliberately switch to Auto.
 
 ## Tags published (live, for the HMI and peers)
 
-`TargetHeight`, `GateHeight`, `Error`, `Moving` (`raising`/`lowering`/`idle`),
-`RaiseOutput`, `LowerOutput`, `Mode`, `Status`, `Fault`, `FaultReason`,
-`HeightValid`.
+`TargetHeight`, `GateHeight` (calibrated), `HeightOffset`, `Error`, `Moving`
+(`raising`/`lowering`/`idle`), `RaiseOutput`, `LowerOutput`, `PumpOutput`,
+`TopLimitActive`, `Mode`, `Status`, `Fault`, `FaultReason`, `HeightValid`.
 
 ## Regenerating `doover_config.json`
 

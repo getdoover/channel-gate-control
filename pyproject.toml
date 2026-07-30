@@ -18,7 +18,13 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+markers = [
+    "interop: end-to-end tests that also need the channel-gate-encoder repo checked out alongside this one",
+]
+# "simulators" is on the path so tests can drive the in-process gate rig
+# (simulators/gate_rig.py) and app harness the same way the docker compose stack
+# drives the containerised physics simulator.
+pythonpath = ["src", "simulators"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 

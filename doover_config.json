@@ -7,7 +7,9 @@
         "allow_many": true,
         "description": "Closed-loop height control of a hydraulic channel gate: a slider sets a target height, the app reads gate height from the channel gate encoder and drives two interlocked solenoid valves (raise/lower) to seek it.",
         "long_description": "README.md",
-        "depends_on": [],
+        "depends_on": [
+            "platform_interface"
+        ],
         "owner_org_key": "",
         "image_name": "ghcr.io/getdoover/channel-gate-control:main",
         "build_args": "--platform linux/amd64,linux/arm64",
@@ -49,7 +51,7 @@
                         "null"
                     ],
                     "x-required": false,
-                    "description": "Hold the outputs off until the source app's 'Homed' tag is true. The encoder's height is incremental and unverified until it has homed against its limit switch, so driving on an unhomed height can move the gate to the wrong position. Disable only for height sources that don't publish a 'Homed' tag.",
+                    "description": "Hold the outputs off until the source app's 'Homed' tag is true. The encoder's height is incremental and unverified until it has homed against its limit switch, so driving on an unhomed height can move the gate to the wrong position. Disable for height sources that don't publish a 'Homed' tag - and disable it if the top limit prox is what calibrates this gate, since otherwise the outputs stay held and the gate can never be driven up to the prox to be calibrated.",
                     "default": true,
                     "x-position": 2
                 },
@@ -89,8 +91,8 @@
                         "null"
                     ],
                     "x-required": false,
-                    "description": "Gate height at the fully-raised/open end of travel. The target slider cannot be set above this.",
-                    "default": 1000.0,
+                    "description": "Gate height at the fully-raised/open end of travel. The target slider cannot be set above this. Defaults to 520 mm, the top limit prox's height - keep the two together, or the slider can ask for heights the prox will refuse to raise to.",
+                    "default": 520.0,
                     "x-position": 5
                 },
                 "raise_do_pin": {
@@ -191,7 +193,7 @@
                     "minimum": 0.05
                 },
                 "estop_di_pin": {
-                    "title": "Top Limit E-Stop DI Pin",
+                    "title": "Top Limit Prox DI Pin",
                     "x-name": "estop_di_pin",
                     "x-hidden": false,
                     "type": [
@@ -199,13 +201,13 @@
                         "null"
                     ],
                     "x-required": false,
-                    "description": "Digital input from the over-travel proximity sensor at the TOP of the gate. When it triggers, the pump and both solenoids are de-energised immediately and a fault latches (operator Reset required). While it stays triggered, raising is hard-blocked but lowering is allowed so the gate can be recovered off the limit. Leave unset if not fitted.",
+                    "description": "Digital input from the over-travel proximity sensor at the TOP of the gate. While it reads active the raise solenoid (and the pump) is hard-blocked, but LOWERING stays available so the gate can still be closed off the limit - it warns, it does not latch a fault, and it clears itself once the gate comes off the sensor. Arriving at the prox also re-zeros the gate height (see Top Limit Height), which is how this gate is calibrated. Leave unset if not fitted.",
                     "default": null,
                     "x-position": 13,
                     "minimum": 0
                 },
                 "estop_active_low": {
-                    "title": "E-Stop Active Low",
+                    "title": "Top Limit Prox Active Low",
                     "x-name": "estop_active_low",
                     "x-hidden": false,
                     "type": [
@@ -213,9 +215,22 @@
                         "null"
                     ],
                     "x-required": false,
-                    "description": "Set for normally-closed proximity sensors that pull the input LOW when the gate reaches the top limit (the falling edge triggers the stop). Clear for normally-open sensors.",
-                    "default": true,
+                    "description": "Clear for a NORMALLY-OPEN prox, which pulls the input HIGH when the gate reaches the top limit (the default). Set for a NORMALLY-CLOSED prox, which holds the input HIGH clear of the target and drops it LOW at the limit.",
+                    "default": false,
                     "x-position": 14
+                },
+                "estop_height_mm": {
+                    "title": "Top Limit Height (mm)",
+                    "x-name": "estop_height_mm",
+                    "x-hidden": false,
+                    "type": [
+                        "number",
+                        "null"
+                    ],
+                    "x-required": false,
+                    "description": "The gate height the top limit prox sits at - the calibration datum. The moment the prox goes active the height is re-zeroed to read this, whatever the encoder had drifted to. Default 520 mm: heights are measured upward from the closed gate, so the prox is at its own real height, not 0 - a 0 here would make every position below the prox read negative and fall outside the target slider's span. Must agree with the travel limits below.",
+                    "default": 520.0,
+                    "x-position": 15
                 },
                 "outputs_enabled": {
                     "title": "Outputs Enabled",
@@ -228,7 +243,7 @@
                     "x-required": false,
                     "description": "Master enable. When off, both solenoids are held de-energised regardless of the setpoint or mode.",
                     "default": true,
-                    "x-position": 15
+                    "x-position": 16
                 },
                 "move_timeout_s": {
                     "title": "Move Timeout (s)",
@@ -241,7 +256,7 @@
                     "x-required": false,
                     "description": "Maximum time a solenoid may be energised in a single continuous move before the app faults and stops. Set to the realistic full-travel time plus margin. 0 disables.",
                     "default": 30.0,
-                    "x-position": 16,
+                    "x-position": 17,
                     "minimum": 0
                 },
                 "stall_window_s": {
@@ -255,7 +270,7 @@
                     "x-required": false,
                     "description": "While moving, the gate must make progress within this window or the app faults (jam, dead encoder, or reversed wiring). 0 disables stall detection.",
                     "default": 4.0,
-                    "x-position": 17,
+                    "x-position": 18,
                     "minimum": 0
                 },
                 "stall_min_progress_mm": {
@@ -269,7 +284,7 @@
                     "x-required": false,
                     "description": "Minimum height change, in the commanded direction, expected within each stall window while moving.",
                     "default": 3.0,
-                    "x-position": 18,
+                    "x-position": 19,
                     "minimum": 0
                 }
             },
@@ -297,7 +312,7 @@
                     "currentValue": "$cmds.app().target::0",
                     "default": 0,
                     "min": 0,
-                    "max": 1000,
+                    "max": 520,
                     "stepSize": 1,
                     "dualSlider": false,
                     "isInverted": false
@@ -359,12 +374,24 @@
                     "decPrecision": 1,
                     "live": true
                 },
+                "height_offset": {
+                    "name": "height_offset",
+                    "type": "uiVariable",
+                    "displayString": "Height Calibration (mm)",
+                    "showActivity": true,
+                    "position": 56,
+                    "hidden": false,
+                    "varType": "float",
+                    "currentValue": "$tag.app().HeightOffset:number:0.0",
+                    "decPrecision": 1,
+                    "live": true
+                },
                 "moving": {
                     "name": "moving",
                     "type": "uiVariable",
                     "displayString": "Movement",
                     "showActivity": true,
-                    "position": 56,
+                    "position": 57,
                     "hidden": false,
                     "varType": "string",
                     "currentValue": "$tag.app().Moving:string:\"idle\"",
@@ -375,7 +402,7 @@
                     "type": "uiVariable",
                     "displayString": "Status",
                     "showActivity": true,
-                    "position": 57,
+                    "position": 58,
                     "hidden": false,
                     "varType": "string",
                     "currentValue": "$tag.app().Status:string:\"starting\"",
@@ -386,7 +413,7 @@
                     "type": "uiVariable",
                     "displayString": "Raise Solenoid",
                     "showActivity": true,
-                    "position": 58,
+                    "position": 59,
                     "hidden": false,
                     "varType": "bool",
                     "currentValue": "$tag.app().RaiseOutput:boolean:false",
@@ -397,7 +424,7 @@
                     "type": "uiVariable",
                     "displayString": "Lower Solenoid",
                     "showActivity": true,
-                    "position": 59,
+                    "position": 60,
                     "hidden": false,
                     "varType": "bool",
                     "currentValue": "$tag.app().LowerOutput:boolean:false",
@@ -408,7 +435,7 @@
                     "type": "uiVariable",
                     "displayString": "Pump",
                     "showActivity": true,
-                    "position": 60,
+                    "position": 61,
                     "hidden": false,
                     "varType": "bool",
                     "currentValue": "$tag.app().PumpOutput:boolean:false",
@@ -418,7 +445,7 @@
                     "name": "no_signal",
                     "type": "uiWarningIndicator",
                     "displayString": "No gate height signal - outputs held",
-                    "position": 61,
+                    "position": 62,
                     "hidden": true,
                     "currentValue": "$cmds.app().no_signal",
                     "can_cancel": false
@@ -427,25 +454,25 @@
                     "name": "height_untrusted",
                     "type": "uiWarningIndicator",
                     "displayString": "Encoder height not trusted (unhomed/stale) - outputs held",
-                    "position": 62,
+                    "position": 63,
                     "hidden": true,
                     "currentValue": "$cmds.app().height_untrusted",
                     "can_cancel": false
                 },
-                "estop": {
-                    "name": "estop",
+                "top_limit": {
+                    "name": "top_limit",
                     "type": "uiWarningIndicator",
-                    "displayString": "TOP LIMIT E-STOP - gate at over-travel sensor",
-                    "position": 63,
+                    "displayString": "TOP LIMIT - raising blocked, lower the gate off the prox",
+                    "position": 64,
                     "hidden": true,
-                    "currentValue": "$cmds.app().estop",
+                    "currentValue": "$cmds.app().top_limit",
                     "can_cancel": false
                 },
                 "fault": {
                     "name": "fault",
                     "type": "uiWarningIndicator",
                     "displayString": "FAULT - outputs latched off, press Reset",
-                    "position": 64,
+                    "position": 65,
                     "hidden": true,
                     "currentValue": "$cmds.app().fault",
                     "can_cancel": false
@@ -455,7 +482,7 @@
                     "type": "uiVariable",
                     "displayString": "Fault Reason",
                     "showActivity": true,
-                    "position": 65,
+                    "position": 66,
                     "hidden": false,
                     "varType": "string",
                     "currentValue": "$tag.app().FaultReason:string:\"\"",
@@ -465,7 +492,7 @@
                     "name": "reset_fault",
                     "type": "uiButton",
                     "displayString": "Reset Fault",
-                    "position": 66,
+                    "position": 67,
                     "hidden": false,
                     "colour": "red",
                     "currentValue": "$cmds.app().reset_fault"

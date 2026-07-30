@@ -39,8 +39,10 @@ class ChannelGateControlConfig(config.Schema):
         description="Hold the outputs off until the source app's 'Homed' tag is "
         "true. The encoder's height is incremental and unverified until it has "
         "homed against its limit switch, so driving on an unhomed height can "
-        "move the gate to the wrong position. Disable only for height sources "
-        "that don't publish a 'Homed' tag.",
+        "move the gate to the wrong position. Disable for height sources that "
+        "don't publish a 'Homed' tag - and disable it if the top limit prox is "
+        "what calibrates this gate, since otherwise the outputs stay held and "
+        "the gate can never be driven up to the prox to be calibrated.",
         default=True,
     )
     heartbeat_timeout_s = config.Number(
@@ -65,8 +67,10 @@ class ChannelGateControlConfig(config.Schema):
         "Maximum Height (mm)",
         name="height_max_mm",
         description="Gate height at the fully-raised/open end of travel. The "
-        "target slider cannot be set above this.",
-        default=1000.0,
+        "target slider cannot be set above this. Defaults to 520 mm, the top "
+        "limit prox's height - keep the two together, or the slider can ask for "
+        "heights the prox will refuse to raise to.",
+        default=520.0,
     )
 
     # --- Solenoid outputs -------------------------------------------------
@@ -131,27 +135,48 @@ class ChannelGateControlConfig(config.Schema):
         minimum=0.05,
     )
 
-    # --- Safety -----------------------------------------------------------
+    # --- Top limit prox (over-travel guard + height calibration) ----------
+    # The three keys below keep their original ``estop_`` names on purpose. They
+    # were named when this input latched a fault like an e-stop; it no longer
+    # does, but renaming the KEYS would silently reset the pin to "not fitted" on
+    # any install already configured, taking the over-travel guard with it. The
+    # labels and descriptions carry the current meaning instead.
     estop_di_pin = config.Integer(
-        "Top Limit E-Stop DI Pin",
+        "Top Limit Prox DI Pin",
         name="estop_di_pin",
         description="Digital input from the over-travel proximity sensor at the "
-        "TOP of the gate. When it triggers, the pump and both solenoids are "
-        "de-energised immediately and a fault latches (operator Reset "
-        "required). While it stays triggered, raising is hard-blocked but "
-        "lowering is allowed so the gate can be recovered off the limit. Leave "
-        "unset if not fitted.",
+        "TOP of the gate. While it reads active the raise solenoid (and the "
+        "pump) is hard-blocked, but LOWERING stays available so the gate can "
+        "still be closed off the limit - it warns, it does not latch a fault, "
+        "and it clears itself once the gate comes off the sensor. Arriving at "
+        "the prox also re-zeros the gate height (see Top Limit Height), which is "
+        "how this gate is calibrated. Leave unset if not fitted.",
         default=None,
         minimum=0,
     )
     estop_active_low = config.Boolean(
-        "E-Stop Active Low",
+        "Top Limit Prox Active Low",
         name="estop_active_low",
-        description="Set for normally-closed proximity sensors that pull the "
-        "input LOW when the gate reaches the top limit (the falling edge "
-        "triggers the stop). Clear for normally-open sensors.",
-        default=True,
+        description="Clear for a NORMALLY-OPEN prox, which pulls the input HIGH "
+        "when the gate reaches the top limit (the default). Set for a "
+        "NORMALLY-CLOSED prox, which holds the input HIGH clear of the target "
+        "and drops it LOW at the limit.",
+        default=False,
     )
+    estop_height_mm = config.Number(
+        "Top Limit Height (mm)",
+        name="estop_height_mm",
+        description="The gate height the top limit prox sits at - the calibration "
+        "datum. The moment the prox goes active the height is re-zeroed to read "
+        "this, whatever the encoder had drifted to. Default 520 mm: heights are "
+        "measured upward from the closed gate, so the prox is at its own real "
+        "height, not 0 - a 0 here would make every position below the prox read "
+        "negative and fall outside the target slider's span. Must agree with the "
+        "travel limits below.",
+        default=520.0,
+    )
+
+    # --- Safety -----------------------------------------------------------
     outputs_enabled = config.Boolean(
         "Outputs Enabled",
         name="outputs_enabled",
