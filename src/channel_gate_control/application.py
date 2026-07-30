@@ -133,6 +133,19 @@ class ChannelGateControlApplication(Application):
         except (TypeError, ValueError, AttributeError) as e:
             log.debug("No persisted height offset to restore: %s", e)
 
+        # A latched fault must survive a restart: the latch exists to stop the
+        # gate driving on a broken measurement, and a reboot fixes neither
+        # hydraulics nor wiring. Cleared the same way as always - Reset Fault.
+        try:
+            if self.tags.Fault.value:
+                self._fault = True
+                self._fault_reason = str(
+                    self.tags.FaultReason.value or "fault restored after restart"
+                )
+                log.warning("Restored latched fault: %s", self._fault_reason)
+        except (TypeError, ValueError, AttributeError) as e:
+            log.debug("No persisted fault to restore: %s", e)
+
         # Top-limit prox. An input that gates an output must not depend on a
         # single edge being delivered, so detection is LEVEL-driven: main_loop
         # polls the DI every cycle (_poll_top_limit) as the guaranteed backstop.
@@ -1000,6 +1013,25 @@ class ChannelGateControlApplication(Application):
                 return f"encoder signal stale ({age:.0f}s old)"
         return None
 
+    async def _push_warning_ui(self, states: dict):
+        """Deep-merge warning visibility into the ui_state aggregate.
+
+        Only on change - the aggregate update is a cloud-bound write, so it
+        must not run every control period. On failure the cache is left
+        stale so the next loop retries.
+        """
+        if getattr(self, "_last_warning_ui", None) == states:
+            return
+        try:
+            await self.update_channel_aggregate(
+                "ui_state",
+                {"state": {"children": {self.app_key: {"children": states}}}},
+                max_age_secs=-1,
+            )
+            self._last_warning_ui = states
+        except Exception as e:
+            log.warning("Failed to push warning visibility to ui_state: %s", e)
+
     def _stop_early_mm(self) -> float:
         """How many mm before the target the stop is commanded in Auto.
 
@@ -1074,20 +1106,48 @@ class ChannelGateControlApplication(Application):
         self.ui.untrusted_warning.hidden = trust_issue is None
         self.ui.top_limit_warning.hidden = not self._top_limit_active
         self.ui.fault_warning.hidden = not self._fault
-        # Put the actual reason in the banner so a
-        # latched fault is self-explanatory from either tab.
         if self._fault and self._fault_reason:
-            self.ui.fault_warning.display_name = (
+            fault_text = (
                 f"FAULT: {self._fault_reason} - outputs latched off, press Reset"
             )
         else:
-            self.ui.fault_warning.display_name = (
-                "FAULT - outputs latched off, press Reset"
-            )
+            fault_text = "FAULT - outputs latched off, press Reset"
+        self.ui.fault_warning.display_name = fault_text
+
+        # The ui_state tree is only published ONCE at setup (values flow as
+        # declarative $tag/$cmds references), so element attribute changes like
+        # `hidden` never reach the site on their own. Visibility must be pushed
+        # into the aggregate explicitly - the site keys BOTH the warning banner
+        # and the orange device icon off `hidden` in the reported state.
+        await self._push_warning_ui(
+            {
+                "no_signal": {"hidden": height is not None},
+                "height_untrusted": {"hidden": trust_issue is None},
+                "top_limit": {"hidden": not self._top_limit_active},
+                "fault": {"hidden": not self._fault, "displayString": fault_text},
+                # Nested elements must be addressed at their real path in the
+                # tree - a bare key here would create a phantom top-level
+                # sibling and leave the real element untouched.
+                "tabs": {
+                    "children": {
+                        "control_tab": {
+                            "children": {
+                                "reset_fault_control": {"hidden": not self._fault},
+                            }
+                        }
+                    }
+                },
+            }
+        )
 
     # ------------------------------------------------------------------
     # Field actions
     # ------------------------------------------------------------------
+    @ui.handler("reset_fault_control", auto_update=False)
+    async def on_reset_fault_control(self, ctx, value):
+        """Control-tab mirror of Reset Fault (visible only while faulted)."""
+        return await self.on_reset_fault(ctx, value)
+
     @ui.handler("reset_fault", auto_update=False)
     async def on_reset_fault(self, ctx, value):
         """Clear a latched fault so Auto control can resume."""

@@ -37,6 +37,15 @@ control_tab = ui.Container(
             default="hold",
             name="mode",
         ),
+        ui.Button(
+            # Mirror of the Diagnostics reset, surfaced HERE only while a
+            # fault is latched - the operator staring at a gate that won't
+            # move must see the way out without hunting through tabs.
+            "Reset Fault",
+            colour=ui.Colour.red,
+            name="reset_fault_control",
+            hidden=True,
+        ),
         ui.NumericVariable(
             "Gate Height (mm)",
             precision=1,

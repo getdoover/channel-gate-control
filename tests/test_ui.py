@@ -40,6 +40,7 @@ def test_schema_nests_the_elements_under_the_tabs():
     assert list(tabs["control_tab"]["children"]) == [
         "target",
         "mode",
+        "reset_fault_control",
         "height",
         "height_offset",
     ]
