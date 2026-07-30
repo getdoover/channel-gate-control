@@ -26,6 +26,18 @@ the encoder/controller pair: the encoder measures, this app acts.
   point as one atomic `set_do` transaction, so the raise and lower solenoids can
   **never** be energised at the same time (which on a double-acting cylinder
   means dead-heading the hydraulics).
+- **Pump lead.** The pump/motor contactor closes `pump_lead_s` (default **1 s**)
+  before the directional solenoid opens, so the pack is up to pressure and the
+  motor's inrush is over before the valve sees the load. Only the *start* is
+  staggered — on stop, valve and pump drop in the same transaction, because
+  dropping the valve late is the unsafe direction. It's applied at the output
+  choke point, so auto moves, top-limit recovery lowers and manual jogs all get
+  it. Two consequences: a manual tap shorter than the lead runs the pump without
+  moving the gate, and every fresh start pays the lead again (the pack has spun
+  down). The stall window starts at the *valve*, not the contactor — otherwise a
+  lead longer than `stall_window_s` would fault every move — while the move
+  timeout deliberately keeps running through the lead, so a pack that never makes
+  pressure still trips.
 - **Fail-safe.** Both solenoids are de-energised on hold, on loss of the height
   signal, on a latched fault, and on app shutdown. The startup routine also
   drives both outputs to their safe (de-energised) state before any control
@@ -180,6 +192,7 @@ until you deliberately switch to Auto. The local switches are armed on AI0/AI1
 | `height_min_mm` / `height_max_mm` | `0` / `520` | Travel limits — the target slider span. Keep the top in step with `estop_height_mm`. |
 | `raise_do_pin` / `lower_do_pin` | — | Digital outputs for the raise / lower solenoids. |
 | `pump_do_pin` | — | Digital output for the hydraulic pump; energised whenever either solenoid is. |
+| `pump_lead_s` | `1` | Seconds the pump/contactor runs before the solenoid opens. Start only — stop is simultaneous. `0` energises both at once. |
 | `do_active_low` | `false` | Set if solenoids energise on a LOW output. |
 | `deadband_mm` | `5` | Stop tolerance around the target. |
 | `hysteresis_mm` | `5` | Extra error before a stopped gate re-engages (anti-chatter). |

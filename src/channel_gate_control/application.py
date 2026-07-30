@@ -32,7 +32,10 @@ class ChannelGateControlApplication(Application):
 
       1. The raise and lower solenoids are written through a single choke point
          (`_write_outputs`) as one atomic transaction, so they can never be
-         energised together.
+         energised together. The pump/motor contactor is written in that same
+         transaction, but leads the valve on START by `pump_lead_s` so the pack
+         is up to pressure before the valve opens; on STOP everything drops
+         together, since dropping the valve late is the unsafe direction.
       2. Any unsafe condition - encoder signal lost, move timeout, or the gate
          failing to move in the commanded direction (jam / dead encoder /
          reversed wiring) - de-energises both solenoids. Timeouts and stalls
@@ -76,6 +79,12 @@ class ChannelGateControlApplication(Application):
         self._raise_state: bool = False
         self._lower_state: bool = False
         self._pump_state: bool = False
+        # Pump lead: when the contactor closed for the current drive (None when
+        # the pump is off), and whether the valve is still being held off waiting
+        # for pressure. Both reset the moment the pump drops out, so every fresh
+        # start pays the lead again - the pack has spun down by then.
+        self._pump_since: float | None = None
+        self._pump_priming: bool = False
         self._top_limit_active: bool = False
         self._top_limit_counter = None  # kept referenced so it isn't garbage-collected
         self._manual_raise_active: bool = False
@@ -274,14 +283,29 @@ class ChannelGateControlApplication(Application):
             if want != self._moving:
                 await self._stop("target reached")
                 return
-            # Safety checks only apply once a move is underway.
-            reason = self._check_move_safety(height)
-            if reason:
-                self._trip(reason)
-                await self._stop(f"FAULT: {reason}")
-                return
+            # Safety checks only apply once a move is underway - and only once
+            # the valve is actually open. While the pump is still leading there
+            # is nothing to measure, so hold the stall reference at the present
+            # height and let its window start from the valve opening rather than
+            # from the contactor closing. The move TIMEOUT deliberately keeps
+            # running through the lead: a pack that never makes pressure has to
+            # trip eventually, and the lead is a fraction of that budget.
+            if self._pump_priming:
+                self._stall_ref_t = time.monotonic()
+                self._stall_ref_h = height
+            else:
+                reason = self._check_move_safety(height)
+                if reason:
+                    self._trip(reason)
+                    await self._stop(f"FAULT: {reason}")
+                    return
 
         await self._drive(self._moving)
+        if self._pump_priming:
+            self._status = (
+                f"pump lead - {self._moving_word()} in "
+                f"{self._priming_remaining_s():.1f}s"
+            )
 
     # ------------------------------------------------------------------
     # Movement helpers
@@ -351,7 +375,8 @@ class ChannelGateControlApplication(Application):
         Enforces the interlocks (never both solenoids energised; never raise
         past the top-limit prox) and writes all pins in a single atomic
         transaction so no intermediate unsafe state can occur. The pump runs
-        exactly when a solenoid does - without it the gate cannot move.
+        whenever a solenoid does - without it the gate cannot move - but it
+        STARTS first, by `pump_lead_s` (see `_apply_pump_lead`).
         """
         if raise_on and lower_on:  # must never happen - hard guard
             log.error("Interlock violation prevented: raise+lower both requested")
@@ -363,6 +388,7 @@ class ChannelGateControlApplication(Application):
             raise_on = False
 
         pump_on = raise_on or lower_on
+        raise_on, lower_on = self._apply_pump_lead(pump_on, raise_on, lower_on)
 
         active_low = bool(self.config.do_active_low.value)
         raise_pin = self._raise_pin()
@@ -389,6 +415,53 @@ class ChannelGateControlApplication(Application):
         self._raise_state = raise_on
         self._lower_state = lower_on
         self._pump_state = pump_on
+
+    def _apply_pump_lead(self, pump_on: bool, raise_on: bool, lower_on: bool):
+        """Hold the directional valve off until the pump has led by `pump_lead_s`.
+
+        The contactor closes first so the pack is up to pressure, and the motor's
+        inrush is over, before the valve opens onto the load. Only the ENERGISE
+        edge is staggered: `pump_on` is decided before this runs, so a stop still
+        drops valve and pump together in the one transaction - dropping the valve
+        late is the unsafe direction.
+
+        Called from `_write_outputs` alone, so every path - auto, the top-limit
+        recovery lower, and a manual jog - gets the same lead without knowing
+        about it.
+        """
+        if not pump_on:
+            self._pump_since = None
+            self._pump_priming = False
+            return raise_on, lower_on
+
+        lead = self._pump_lead_s()
+        now = time.monotonic()
+        if self._pump_since is None:
+            self._pump_since = now
+            if lead > 0:
+                log.info("Pump started - valve held off for %.1fs lead", lead)
+        self._pump_priming = (now - self._pump_since) < lead
+        if self._pump_priming:
+            return False, False
+        return raise_on, lower_on
+
+    def _pump_lead_s(self) -> float:
+        """Configured pump lead, in seconds.
+
+        Falls back to 0 on an unreadable value - that is exactly the behaviour
+        from before this setting existed, so a deployment predating the key
+        degrades to "both together" rather than holding the valve shut forever.
+        """
+        try:
+            return max(0.0, float(self.config.pump_lead_s.value or 0.0))
+        except (TypeError, ValueError, AttributeError):
+            return 0.0
+
+    def _priming_remaining_s(self) -> float:
+        """Seconds of pump lead left, for the status line."""
+        if self._pump_since is None:
+            return 0.0
+        return max(0.0, self._pump_lead_s() - (time.monotonic() - self._pump_since))
 
     @staticmethod
     def _level(energised: bool, active_low: bool) -> int:
@@ -678,10 +751,13 @@ class ChannelGateControlApplication(Application):
         # is one of the reasons local control exists. A held deadman switch with
         # the operator watching the gate is its own protection.
         await self._drive(direction)
+        word = "manual raise" if direction == "raise" else "manual lower"
+        # The lead applies to a jog as well: the operator holding the switch sees
+        # the pump run and the gate start a moment later, so say which it is.
         self._status = (
-            "manual raise (local switch)"
-            if direction == "raise"
-            else "manual lower (local switch)"
+            f"{word} - pump lead {self._priming_remaining_s():.1f}s"
+            if self._pump_priming
+            else f"{word} (local switch)"
         )
 
     async def _on_manual_pulse(self, di, di_value, dt_secs, count, edge):

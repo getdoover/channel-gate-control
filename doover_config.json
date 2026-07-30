@@ -137,6 +137,20 @@
                     "x-position": 8,
                     "minimum": 0
                 },
+                "pump_lead_s": {
+                    "title": "Pump Lead (s)",
+                    "x-name": "pump_lead_s",
+                    "x-hidden": false,
+                    "type": [
+                        "number",
+                        "null"
+                    ],
+                    "x-required": false,
+                    "description": "How long the pump/motor contactor runs BEFORE the directional solenoid is energised, so the pack is up to pressure (and the motor's inrush over) before the valve opens. Only the start is staggered - on stop, valve and pump drop together in the same transaction. Applies to manual jogs too, so a tap shorter than this runs the pump without moving the gate. 0 energises both at once.",
+                    "default": 1.0,
+                    "x-position": 9,
+                    "minimum": 0
+                },
                 "do_active_low": {
                     "title": "Outputs Active Low",
                     "x-name": "do_active_low",
@@ -148,7 +162,7 @@
                     "x-required": false,
                     "description": "Set if a solenoid energises when its DO is driven LOW (e.g. sinking relay boards). Default: energise on HIGH.",
                     "default": false,
-                    "x-position": 9
+                    "x-position": 10
                 },
                 "deadband_mm": {
                     "title": "Deadband (mm)",
@@ -161,7 +175,7 @@
                     "x-required": false,
                     "description": "Stop driving once the gate is within this distance of the target. Too small hunts around the setpoint; too large parks short.",
                     "default": 5.0,
-                    "x-position": 10,
+                    "x-position": 11,
                     "minimum": 0
                 },
                 "hysteresis_mm": {
@@ -175,7 +189,7 @@
                     "x-required": false,
                     "description": "Extra margin beyond the deadband before a *stopped* gate starts moving again. Stops the solenoids chattering when the gate drifts slightly off target. Re-engage error = deadband + hysteresis.",
                     "default": 5.0,
-                    "x-position": 11,
+                    "x-position": 12,
                     "minimum": 0
                 },
                 "control_period_s": {
@@ -189,7 +203,7 @@
                     "x-required": false,
                     "description": "How often the control loop evaluates height and drives the outputs. 0.2-0.5 s suits hydraulic gate control.",
                     "default": 0.25,
-                    "x-position": 12,
+                    "x-position": 13,
                     "minimum": 0.05
                 },
                 "estop_di_pin": {
@@ -203,7 +217,7 @@
                     "x-required": false,
                     "description": "Digital input from the over-travel proximity sensor at the TOP of the gate. While it reads active the raise solenoid (and the pump) is hard-blocked, but LOWERING stays available so the gate can still be closed off the limit - it warns, it does not latch a fault, and it clears itself once the gate comes off the sensor. Arriving at the prox also re-zeros the gate height (see Top Limit Height), which is how this gate is calibrated. Leave unset if not fitted.",
                     "default": null,
-                    "x-position": 13,
+                    "x-position": 14,
                     "minimum": 0
                 },
                 "estop_active_low": {
@@ -217,7 +231,7 @@
                     "x-required": false,
                     "description": "Clear for a NORMALLY-OPEN prox, which pulls the input HIGH when the gate reaches the top limit (the default). Set for a NORMALLY-CLOSED prox, which holds the input HIGH clear of the target and drops it LOW at the limit.",
                     "default": false,
-                    "x-position": 14
+                    "x-position": 15
                 },
                 "estop_height_mm": {
                     "title": "Top Limit Height (mm)",
@@ -230,7 +244,7 @@
                     "x-required": false,
                     "description": "The gate height the top limit prox sits at - the calibration datum. The moment the prox goes active the height is re-zeroed to read this, whatever the encoder had drifted to. Default 520 mm: heights are measured upward from the closed gate, so the prox is at its own real height, not 0 - a 0 here would make every position below the prox read negative and fall outside the target slider's span. Must agree with the travel limits below.",
                     "default": 520.0,
-                    "x-position": 15
+                    "x-position": 16
                 },
                 "manual_raise_ai_pin": {
                     "title": "Manual Raise AI Pin",
@@ -243,7 +257,7 @@
                     "x-required": false,
                     "description": "Analog input wired to the local momentary RAISE switch, which puts 12 V on the pin while it is held. Only AI0 and AI1 support the voltage-step detection that gives the press an immediate response. Default AI0, the standard wiring. Set to null ONLY if no raise switch is fitted - anything else putting 6 V+ on the pin will raise the gate.",
                     "default": 0,
-                    "x-position": 16,
+                    "x-position": 17,
                     "minimum": 0,
                     "maximum": 1
                 },
@@ -258,7 +272,7 @@
                     "x-required": false,
                     "description": "Analog input wired to the local momentary LOWER switch, which puts 12 V on the pin while it is held. Only AI0 and AI1 support the voltage-step detection that gives the press an immediate response. Default AI1, the standard wiring. Set to null ONLY if no lower switch is fitted - anything else putting 6 V+ on the pin will lower the gate.",
                     "default": 1,
-                    "x-position": 17,
+                    "x-position": 18,
                     "minimum": 0,
                     "maximum": 1
                 },
@@ -273,7 +287,7 @@
                     "x-required": false,
                     "description": "Voltage at or above which a local switch reads as pressed, and the sample-to-sample step the press detector is armed with. Default 6 V: half of the 12 V switch supply, so it clears cable droop and noise without missing a press. A threshold of 0 or below would read every input level as pressed, so it disables local control outright instead.",
                     "default": 6.0,
-                    "x-position": 18,
+                    "x-position": 19,
                     "minimum": 0.1
                 },
                 "manual_poll_s": {
@@ -287,7 +301,7 @@
                     "x-required": false,
                     "description": "How often the firmware samples the manual switch inputs looking for a press. 0.4 emits the legacy bare edge string, for older platform interfaces that cannot parse an explicit poll rate.",
                     "default": 0.1,
-                    "x-position": 19,
+                    "x-position": 20,
                     "minimum": 0.05
                 },
                 "outputs_enabled": {
@@ -301,7 +315,7 @@
                     "x-required": false,
                     "description": "Master enable. When off, both solenoids are held de-energised regardless of the setpoint or mode.",
                     "default": true,
-                    "x-position": 20
+                    "x-position": 21
                 },
                 "move_timeout_s": {
                     "title": "Move Timeout (s)",
@@ -314,7 +328,7 @@
                     "x-required": false,
                     "description": "Maximum time a solenoid may be energised in a single continuous move before the app faults and stops. Set to the realistic full-travel time plus margin. 0 disables.",
                     "default": 30.0,
-                    "x-position": 21,
+                    "x-position": 22,
                     "minimum": 0
                 },
                 "stall_window_s": {
@@ -328,7 +342,7 @@
                     "x-required": false,
                     "description": "While moving, the gate must make progress within this window or the app faults (jam, dead encoder, or reversed wiring). 0 disables stall detection.",
                     "default": 4.0,
-                    "x-position": 22,
+                    "x-position": 23,
                     "minimum": 0
                 },
                 "stall_min_progress_mm": {
@@ -342,7 +356,7 @@
                     "x-required": false,
                     "description": "Minimum height change, in the commanded direction, expected within each stall window while moving.",
                     "default": 3.0,
-                    "x-position": 23,
+                    "x-position": 24,
                     "minimum": 0
                 }
             },

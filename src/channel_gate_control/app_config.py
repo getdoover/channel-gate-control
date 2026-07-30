@@ -100,6 +100,18 @@ class ChannelGateControlConfig(config.Schema):
         default=None,
         minimum=0,
     )
+    pump_lead_s = config.Number(
+        "Pump Lead (s)",
+        name="pump_lead_s",
+        description="How long the pump/motor contactor runs BEFORE the "
+        "directional solenoid is energised, so the pack is up to pressure (and "
+        "the motor's inrush over) before the valve opens. Only the start is "
+        "staggered - on stop, valve and pump drop together in the same "
+        "transaction. Applies to manual jogs too, so a tap shorter than this "
+        "runs the pump without moving the gate. 0 energises both at once.",
+        default=1.0,
+        minimum=0,
+    )
     do_active_low = config.Boolean(
         "Outputs Active Low",
         name="do_active_low",

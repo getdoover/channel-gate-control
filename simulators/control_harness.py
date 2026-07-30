@@ -98,6 +98,9 @@ CONTROL_DEFAULTS: dict[str, Any] = {
     "raise_do_pin": 2,
     "lower_do_pin": 3,
     "pump_do_pin": 4,
+    # No pump lead by default: the rig tests measure the control loop, and a lead
+    # only delays each start. The lead has its own tests, which set it explicitly.
+    "pump_lead_s": 0.0,
     "do_active_low": False,
     "deadband_mm": 5.0,
     "hysteresis_mm": 5.0,

@@ -68,6 +68,8 @@ def _app_with(platform, **cfg):
     app._raise_state = False
     app._lower_state = False
     app._pump_state = False
+    app._pump_since = None
+    app._pump_priming = False
     app._top_limit_active = False
     app._height_offset = 0.0
     app._limit_calibrated = False
@@ -136,6 +138,109 @@ async def test_pump_runs_with_either_solenoid_only():
     assert plat.calls[-1] == ([2, 3, 4], [0, 1, 0])
     await app._write_outputs(False, False)
     assert plat.calls[-1] == ([2, 3, 4], [1, 1, 1])
+
+
+def _fast_forward_pump(app, seconds):
+    """Pretend the pump has been running ``seconds`` longer than it has.
+
+    Cheaper and steadier than sleeping through a real lead, and it exercises the
+    same monotonic arithmetic the app does.
+    """
+    app._pump_since -= seconds
+
+
+async def test_pump_leads_the_valve_on_start():
+    plat = FakePlatform()
+    app = _app_with(
+        plat, raise_do_pin=2, lower_do_pin=3, pump_do_pin=4,
+        do_active_low=False, pump_lead_s=1.0,
+    )
+
+    # Raise requested: the contactor closes, the valve does NOT - the pack has to
+    # come up to pressure (and the motor's inrush finish) first.
+    await app._write_outputs(True, False)
+    assert plat.calls[-1] == ([2, 3, 4], [0, 0, 1])
+    assert app._pump_priming
+    assert app._pump_state and not app._raise_state
+
+    # Still inside the lead: nothing changes.
+    _fast_forward_pump(app, 0.6)
+    await app._write_outputs(True, False)
+    assert plat.calls[-1] == ([2, 3, 4], [0, 0, 1])
+    assert app._pump_priming
+
+    # Lead elapsed: the valve opens, pump still running.
+    _fast_forward_pump(app, 0.5)
+    await app._write_outputs(True, False)
+    assert plat.calls[-1] == ([2, 3, 4], [1, 0, 1])
+    assert not app._pump_priming
+    assert app._raise_state and app._pump_state
+
+    # Lowering is led the same way - the lead is about the hydraulics, not the
+    # direction - and the pump keeps leading from ITS start, not the reversal.
+    await app._write_outputs(False, True)
+    assert plat.calls[-1] == ([2, 3, 4], [0, 1, 1])
+
+
+async def test_stop_drops_valve_and_pump_together_and_relead_on_restart():
+    plat = FakePlatform()
+    app = _app_with(
+        plat, raise_do_pin=2, lower_do_pin=3, pump_do_pin=4,
+        do_active_low=False, pump_lead_s=1.0,
+    )
+    await app._write_outputs(True, False)
+    _fast_forward_pump(app, 1.1)
+    await app._write_outputs(True, False)
+    assert app._raise_state
+
+    # Stop: ONE transaction, everything off. The lead never delays a stop -
+    # dropping the valve late is the unsafe direction.
+    await app._write_outputs(False, False)
+    assert plat.calls[-1] == ([2, 3, 4], [0, 0, 0])
+    assert app._pump_since is None and not app._pump_priming
+
+    # The pack has spun down, so the next start pays the lead again.
+    await app._write_outputs(True, False)
+    assert plat.calls[-1] == ([2, 3, 4], [0, 0, 1])
+    assert app._pump_priming
+
+
+async def test_pump_lead_of_zero_energises_together():
+    plat = FakePlatform()
+    app = _app_with(
+        plat, raise_do_pin=2, lower_do_pin=3, pump_do_pin=4,
+        do_active_low=False, pump_lead_s=0.0,
+    )
+    await app._write_outputs(True, False)
+    assert plat.calls[-1] == ([2, 3, 4], [1, 0, 1])
+    assert not app._pump_priming
+
+
+async def test_unreadable_pump_lead_degrades_to_no_lead():
+    """A deployment predating the key must not hold the valve shut forever."""
+    plat = FakePlatform()
+    app = _app_with(  # no pump_lead_s in the config at all
+        plat, raise_do_pin=2, lower_do_pin=3, pump_do_pin=4, do_active_low=False
+    )
+    assert app._pump_lead_s() == 0.0
+    await app._write_outputs(True, False)
+    assert plat.calls[-1] == ([2, 3, 4], [1, 0, 1])
+    assert not app._pump_priming
+
+
+async def test_pump_lead_applies_to_manual_jog():
+    plat = FakePlatform()
+    app = _limit_app(plat, pump_lead_s=1.0)
+    app._manual_raise_active = True
+
+    await app._manual_control("raise")
+    assert plat.calls[-1] == ([2, 3, 4], [0, 0, 1])  # pump only
+    assert "manual raise" in app._status and "pump lead" in app._status
+
+    _fast_forward_pump(app, 1.1)
+    await app._manual_control("raise")
+    assert plat.calls[-1] == ([2, 3, 4], [1, 0, 1])
+    assert app._status == "manual raise (local switch)"
 
 
 async def test_top_limit_blocks_raise_allows_lower():
@@ -450,6 +555,43 @@ async def test_top_limit_does_not_hold_the_outputs_after_it_clears():
     assert not app._fault
     assert app._moving == "lower"
     assert plat.calls[-1] == ([2, 3, 4], [0, 1, 1])
+
+
+async def test_pump_lead_does_not_look_like_a_stall():
+    """The stall window has to start at the valve, not at the contactor.
+
+    A lead longer than ``stall_window_s`` would otherwise fault every move: the
+    gate genuinely hasn't moved while the valve is shut, which is exactly what
+    the stall detector is looking for.
+    """
+    plat = FakePlatform()
+    app, bus = await _loop_app(
+        plat, 100.0, target=400.0,
+        pump_lead_s=1.0, stall_window_s=0.5, stall_min_progress_mm=3.0,
+    )
+
+    await app.main_loop()  # starts the move: pump on, valve held off
+    assert app._pump_priming
+    assert bus.get_tag("PumpOutput", app_key=CONTROL_APP_KEY)
+    assert not bus.get_tag("RaiseOutput", app_key=CONTROL_APP_KEY)
+    assert "pump lead" in bus.get_tag("Status", app_key=CONTROL_APP_KEY)
+
+    # Height pegged, stall window forced to look elapsed, still priming: no fault.
+    for _ in range(3):
+        app._stall_ref_t -= 1.0
+        await app.main_loop()
+        assert not app._fault, app._fault_reason
+
+    # Valve opens on this pass.
+    _fast_forward_pump(app, 1.1)
+    await app.main_loop()
+    assert not app._pump_priming
+    assert bus.get_tag("RaiseOutput", app_key=CONTROL_APP_KEY)
+
+    # NOW a gate that doesn't move is a real stall.
+    app._stall_ref_t -= 1.0
+    await app.main_loop()
+    assert app._fault and "not moving as commanded" in app._fault_reason
 
 
 def test_stall_detects_wrong_way_and_passes_real_progress():
