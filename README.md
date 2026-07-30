@@ -76,9 +76,75 @@ immediate stop. A failed read holds the last state rather than releasing the
 block. The edge callback reads the pin level back rather than trusting the
 callback's `value`, which pydoover delivers as `False` on every driver.
 
+### Local control (momentary switch at the gate)
+
+A momentary switch at the gate puts **12 V** on an analog input — `manual_raise_ai_pin`
+for up, `manual_lower_ai_pin` for down. While it's held the gate jogs that way; on
+release it stops. Only **AI0** and **AI1** can do this (they're the pins that
+support the voltage-step detection), so both keys are capped at `1`.
+
+**It is opt-in.** Both pins default to *unset*, and each direction is disabled
+until its pin is configured — nothing here arms itself. That's deliberate: the
+platform backfills schema defaults into deployments that don't carry the key, so
+a numeric default would have armed a gate-driving input, above the fault latch,
+on every install already in the field.
+
+- **It outranks a latched fault**, on purpose. The switch is the on-site recovery
+  path: it has to work in exactly the situations Auto refuses to move in — dead
+  or unhomed encoder, latched stall or move timeout — and the operator standing
+  at the gate watching it is the safety case that stands in for the move-timeout
+  and stall detector (both of which need a trusted height anyway). The latch
+  itself is untouched: Auto stays off until Reset.
+- **It works in either mode.** Hold only means "don't chase the setpoint".
+- **`outputs_enabled` still wins.** The master enable is the one gate above it.
+- **Both switches held ⇒ nothing moves**, resolved before the output choke point
+  so the interlock never has to catch an operator action.
+- **The top limit still hard-blocks a manual raise**, and still leaves manual
+  lower available — including on the press fast path, which polls the prox itself
+  rather than waiting for the first control period to do it.
+- On release, Auto simply resumes on the next pass — deadband and hysteresis
+  re-engage as normal, no reset and no extra state. The resumed move is always a
+  **fresh** move, never a hunting continuation of the one the jog interrupted: a
+  jog moves the gate an arbitrary distance, so inheriting the old move clock
+  would fault it on a move timeout it never earned.
+
+Press detection is a **voltage-step** pulse counter on the analog input
+(`VI+<threshold>`, fired by the 0 → 12 V jump), and release is a **level poll** in
+`main_loop`, so the worst-case stop latency is one control period — the same as
+every other stop here. It has to be that way round: the firmware holds one
+threshold per pin, so a pin streaming presses cannot also stream releases. The
+poll is also the backstop for a press the stream drops, and a **failed read
+releases** both switches — the opposite of the top limit's hold-last-state,
+because an input that *drives* an output must drop out when it can't be read. A
+level list that doesn't match the pins asked for counts as a failed read too,
+rather than being zipped and misattributed, and clearing the pins at runtime drops
+any switch that was reading pressed.
+
+`manual_poll_s` sets the firmware sample rate. Leave it at `0.4` and the legacy
+bare edge string is emitted, for older platform interfaces that crash parsing an
+explicit rate.
+
+`manual_threshold_v` never falls back to `0`: an unreadable value takes the 6 V
+schema default, because a 0 V threshold would read every level — a released
+switch included — as held down. A threshold explicitly at or below `0` disables
+local control outright (nothing armed, both flags forced released) and says so in
+the log at startup.
+
 If the prox is what calibrates this gate, turn `require_homed` **off** —
 otherwise the outputs stay held waiting for the encoder to home and the gate can
 never be driven up to the prox in the first place.
+
+## Cloud UI
+
+Two tabs, **Control** open by default:
+
+| Tab | Contents |
+|-----|----------|
+| **Control** | Target Height (slider), Control Mode (Hold / Auto), Gate Height, Height Calibration — what you need to run the gate, and nothing else. |
+| **Diagnostics** | Target as the app read it, Error, Movement, Status, Raise / Lower / Pump outputs, the two local switch states, Fault Reason and **Reset Fault**. |
+
+The four warning indicators — no height signal, height not trusted, top limit,
+fault — sit **outside** the tabs, so they're visible whichever tab is open.
 
 ## Getting started (bench simulator)
 
@@ -92,14 +158,16 @@ doover app run        # docker compose up in simulators/
 
 Then open the app in the Doover UI:
 
-1. Set **Control Mode** → **Auto**.
-2. Drag **Target Height** to a value.
-3. Watch **Raise/Lower Solenoid** energise and **Gate Height** converge on the
-   target, then the solenoids drop out inside the deadband.
+1. On **Control**, set **Control Mode** → **Auto**.
+2. Drag **Target Height** to a value, and watch **Gate Height** converge on it.
+3. On **Diagnostics**, watch **Raise/Lower Solenoid** energise, then drop out
+   once the gate is inside the deadband.
 
 The gate starts at 400 mm with 1000 mm of travel at 80 mm/s (tunable in
 `simulators/docker-compose.yml`). Mode defaults to **Hold** so nothing moves
-until you deliberately switch to Auto.
+until you deliberately switch to Auto. The sim config deliberately arms the local
+switches on AI0/AI1 (they're opt-in everywhere else) so the manual path can be
+exercised on the bench.
 
 ## Configuration
 
@@ -119,7 +187,10 @@ until you deliberately switch to Auto.
 | `estop_di_pin` | — | Digital input from the top limit prox. Unset ⇒ not fitted. |
 | `estop_active_low` | `false` | Clear for a normally-open prox (active HIGH), set for normally-closed. |
 | `estop_height_mm` | `520` | Gate height the prox sits at — the calibration datum the height is re-zeroed to. |
-| `outputs_enabled` | `true` | Master enable; off ⇒ both solenoids held de-energised. |
+| `manual_raise_ai_pin` / `manual_lower_ai_pin` | — | Analog inputs the local momentary raise / lower switches feed 12 V into. AI0/AI1 only (`0`–`1`). Opt-in: unset ⇒ that direction has no local control. |
+| `manual_threshold_v` | `6` | Volts at which a local switch reads as pressed, and the step the press detector is armed with. `0` or below disables local control rather than reading every level as pressed. |
+| `manual_poll_s` | `0.1` | Firmware sample rate for the switch inputs. `0.4` emits the legacy bare edge string. |
+| `outputs_enabled` | `true` | Master enable; off ⇒ both solenoids held de-energised (the only gate above local control). |
 | `move_timeout_s` | `30` | Max continuous energise time per move before faulting. `0` disables. |
 | `stall_window_s` | `4` | Window the gate must show progress within while moving. `0` disables. |
 | `stall_min_progress_mm` | `3` | Minimum progress expected per stall window. |
@@ -128,11 +199,12 @@ until you deliberately switch to Auto.
 
 `TargetHeight`, `GateHeight` (calibrated), `HeightOffset`, `Error`, `Moving`
 (`raising`/`lowering`/`idle`), `RaiseOutput`, `LowerOutput`, `PumpOutput`,
-`TopLimitActive`, `Mode`, `Status`, `Fault`, `FaultReason`, `HeightValid`.
+`TopLimitActive`, `ManualRaise`, `ManualLower`, `Mode`, `Status`, `Fault`,
+`FaultReason`, `HeightValid`.
 
 ## Regenerating `doover_config.json`
 
 ```bash
-uv run export-config                                        # config schema
-uv run python -c "from channel_gate_control.app_ui import export; export()"  # UI schema
+uv run export-config   # config schema
+uv run export-ui       # UI schema
 ```

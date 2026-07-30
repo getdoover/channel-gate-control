@@ -15,5 +15,7 @@
     "stall_min_progress_mm": 3.0,
     "pump_do_pin": 2,
     "estop_di_pin": 3,
-    "estop_active_low": false
+    "estop_active_low": false,
+    "manual_raise_ai_pin": 0,
+    "manual_lower_ai_pin": 1
 }

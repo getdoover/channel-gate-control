@@ -10,7 +10,9 @@ class ChannelGateControlTags(Tags):
     ``LowerOutput`` reflect the actual solenoid drive so a simulator (or another
     app) can close the physical loop, and ``Fault`` / ``FaultReason`` surface any
     latched trip. ``HeightOffset`` is published (not just held in memory) so the
-    calibration survives an app restart.
+    calibration survives an app restart. ``ManualRaise`` / ``ManualLower`` mirror
+    the local momentary switches as read, so the HMI shows what the operator at
+    the gate is doing.
     """
 
     TargetHeight = Tag("number", default=0.0, live=True)     # setpoint, mm
@@ -27,3 +29,5 @@ class ChannelGateControlTags(Tags):
     Fault = Tag("boolean", default=False, live=True)         # latched trip
     FaultReason = Tag("string", default="", live=True)       # why it tripped
     HeightValid = Tag("boolean", default=False, live=True)   # encoder signal present
+    ManualRaise = Tag("boolean", default=False, live=True)   # local up switch held
+    ManualLower = Tag("boolean", default=False, live=True)   # local down switch held

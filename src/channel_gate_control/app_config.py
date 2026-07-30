@@ -176,6 +176,58 @@ class ChannelGateControlConfig(config.Schema):
         default=520.0,
     )
 
+    # --- Local manual control ---------------------------------------------
+    # A momentary switch at the gate puts 12 V on an analog input while held.
+    # Analog rather than digital because these are the pins the switch is wired
+    # to, and because a voltage threshold tolerates the long field run's droop.
+    #
+    # Both pins default to unset - local control is OPT-IN. A numeric default
+    # would be backfilled into every already-deployed install that has no such
+    # key, silently arming an input that drives the gate above the fault latch
+    # on sites where nothing is wired to it.
+    manual_raise_ai_pin = config.Integer(
+        "Manual Raise AI Pin",
+        name="manual_raise_ai_pin",
+        description="Analog input wired to the local momentary RAISE switch, "
+        "which puts 12 V on the pin while it is held. Only AI0 and AI1 support "
+        "the voltage-step detection that gives the press an immediate response. "
+        "Local raising is opt-in: leave unset (the default) and it is disabled.",
+        default=None,
+        minimum=0,
+        maximum=1,
+    )
+    manual_lower_ai_pin = config.Integer(
+        "Manual Lower AI Pin",
+        name="manual_lower_ai_pin",
+        description="Analog input wired to the local momentary LOWER switch, "
+        "which puts 12 V on the pin while it is held. Only AI0 and AI1 support "
+        "the voltage-step detection that gives the press an immediate response. "
+        "Local lowering is opt-in: leave unset (the default) and it is disabled.",
+        default=None,
+        minimum=0,
+        maximum=1,
+    )
+    manual_threshold_v = config.Number(
+        "Manual Switch Threshold (V)",
+        name="manual_threshold_v",
+        description="Voltage at or above which a local switch reads as pressed, "
+        "and the sample-to-sample step the press detector is armed with. Default "
+        "6 V: half of the 12 V switch supply, so it clears cable droop and noise "
+        "without missing a press. A threshold of 0 or below would read every "
+        "input level as pressed, so it disables local control outright instead.",
+        default=6.0,
+        minimum=0.1,
+    )
+    manual_poll_s = config.Number(
+        "Manual Switch Poll (s)",
+        name="manual_poll_s",
+        description="How often the firmware samples the manual switch inputs "
+        "looking for a press. 0.4 emits the legacy bare edge string, for older "
+        "platform interfaces that cannot parse an explicit poll rate.",
+        default=0.1,
+        minimum=0.05,
+    )
+
     # --- Safety -----------------------------------------------------------
     outputs_enabled = config.Boolean(
         "Outputs Enabled",

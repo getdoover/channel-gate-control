@@ -105,6 +105,12 @@ CONTROL_DEFAULTS: dict[str, Any] = {
     "estop_di_pin": None,
     "estop_active_low": False,  # normally-open prox: active HIGH
     "estop_height_mm": 520.0,  # the prox's height: the calibration datum
+    # Local manual switches: both pins unset, so the manual path is inert and
+    # every test that doesn't ask for it behaves exactly as it did before.
+    "manual_raise_ai_pin": None,
+    "manual_lower_ai_pin": None,
+    "manual_threshold_v": 6.0,
+    "manual_poll_s": 0.1,
     "outputs_enabled": True,
     "move_timeout_s": 30.0,
     "stall_window_s": 4.0,

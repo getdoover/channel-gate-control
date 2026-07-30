@@ -16,6 +16,11 @@ log = logging.getLogger(__name__)
 # solenoids cycling forever. Rest longer than this and the next move starts clean.
 _EPISODE_SETTLE_S = 3.0
 
+# Fallback for the local switches' press threshold, matching the config schema's
+# default. Used when the deployed config carries no readable value - never 0,
+# which would read every input level (including 0 V) as "pressed".
+_MANUAL_THRESHOLD_FALLBACK_V = 6.0
+
 
 class ChannelGateControlApplication(Application):
     """Closed-loop height control of a hydraulic channel gate.
@@ -39,6 +44,16 @@ class ChannelGateControlApplication(Application):
     once the gate comes off the sensor. Arriving at it also re-zeros the gate
     height - the prox is the calibration datum for this gate, so the height the
     encoder reports is anchored to it via `_height_offset`.
+
+    Local manual control sits on top of all of that: a momentary switch at the
+    gate puts 12 V on an analog input, and the gate jogs that way while it is
+    held. It works in either mode and, deliberately, ABOVE the fault latch - the
+    switch is the on-site recovery path, the one that has to work with a dead
+    encoder or a latched stall, and the operator standing at the gate is the
+    safety case that replaces the move-timeout and stall detector. Only the
+    master output enable outranks it. Holding both switches at once drives
+    nothing (resolved before the output choke point), and the top limit still
+    hard-blocks a manual raise while leaving manual lower available.
     """
 
     config_cls = ChannelGateControlConfig
@@ -63,6 +78,9 @@ class ChannelGateControlApplication(Application):
         self._pump_state: bool = False
         self._top_limit_active: bool = False
         self._top_limit_counter = None  # kept referenced so it isn't garbage-collected
+        self._manual_raise_active: bool = False
+        self._manual_lower_active: bool = False
+        self._manual_counters: list = []  # kept referenced, as above
         # Calibration: gate height = encoder height + offset, re-zeroed whenever
         # the gate arrives at the top limit prox. `_limit_calibrated` tracks
         # whether THIS arrival has been used, so sitting on the sensor doesn't
@@ -110,6 +128,37 @@ class ChannelGateControlApplication(Application):
             )
             log.info("Top limit prox listener started on DI%s", limit_pin)
 
+        # Local manual switches. The press is a fast path only: the firmware
+        # holds ONE threshold config per VI pin, so arming a VI- release counter
+        # on the same pin would overwrite the press config and lose presses
+        # entirely. Releases - and any press the stream drops - come from the
+        # level poll in main_loop, exactly like the top limit.
+        manual_pins = self._manual_pins()
+        threshold = self._manual_threshold()
+        if manual_pins and threshold <= 0:
+            # Nothing is armed and nothing will ever read as pressed. Said once,
+            # here, because it is a misconfiguration an operator has to fix - the
+            # switch at the gate is silently dead until they do.
+            log.warning(
+                "Local manual control DISABLED: switch threshold is %g V, and at "
+                "or below 0 V every input level would read as pressed",
+                threshold,
+            )
+        else:
+            edge = self._manual_edge()
+            for direction, pin in manual_pins.items():
+                self._manual_counters.append(
+                    self.platform_iface.get_new_pulse_counter(
+                        pin, edge=edge, callback=self._on_manual_pulse
+                    )
+                )
+                log.info(
+                    "Local manual %s switch listener started on AI%s (edge %s)",
+                    direction,
+                    pin,
+                    edge,
+                )
+
         self._status = "ready"
 
     async def on_shutdown_at(self, _dt):
@@ -126,6 +175,9 @@ class ChannelGateControlApplication(Application):
         # Poll the top limit FIRST, before any control decision or drive, so a
         # missed activating edge is caught within one control period.
         await self._poll_top_limit()
+        # Then the local switches: the loop is where a RELEASE is noticed, so
+        # this has to run before the control decision that acts on it.
+        await self._poll_manual_inputs()
 
         raw_height = self._read_raw_height()
         # Re-zero while the gate sits on the prox. Done here rather than in the
@@ -149,11 +201,25 @@ class ChannelGateControlApplication(Application):
 
     async def _control(self, height, target, mode, trust_issue):
         # --- Safety / mode gates: any of these hold the outputs off -------
-        if self._fault:
-            await self._stop(f"FAULT: {self._fault_reason}")
-            return
         if not self.config.outputs_enabled.value:
             await self._stop("outputs disabled")
+            return
+
+        # Local manual control is checked BEFORE the fault latch, deliberately.
+        # The switch at the gate is the on-site recovery path: it has to work in
+        # precisely the situations auto control refuses to move in - dead or
+        # unhomed encoder, latched stall or move timeout - and the operator
+        # physically watching the gate is the safety case that stands in for the
+        # automatic protections. It also works in either mode, since Hold only
+        # means "don't chase the setpoint". Only the master enable above outranks
+        # it. The latch itself is untouched: auto stays off until Reset.
+        manual = self._manual_request()
+        if manual is not None:
+            await self._manual_control(manual)
+            return
+
+        if self._fault:
+            await self._stop(f"FAULT: {self._fault_reason}")
             return
         if mode != "auto":
             await self._stop("hold")
@@ -441,6 +507,211 @@ class ChannelGateControlApplication(Application):
         )
 
     # ------------------------------------------------------------------
+    # Local manual control (momentary switch at the gate)
+    # ------------------------------------------------------------------
+    def _manual_threshold(self) -> float:
+        """Volts at or above which a local switch reads as pressed.
+
+        The one place the threshold is resolved, because getting it wrong is
+        fail-DANGEROUS: an unreadable value must never collapse to 0, or every
+        reading - 0 V included - counts as a held switch and the gate drives
+        itself above the fault latch. So a missing or non-numeric value takes the
+        schema default, and a value of 0 or below is read as "local control off"
+        (no counters armed, both flags forced released) rather than as a switch
+        that is always pressed.
+        """
+        try:
+            return float(self.config.manual_threshold_v.value)
+        except (TypeError, ValueError, AttributeError):
+            return _MANUAL_THRESHOLD_FALLBACK_V
+
+    def _manual_edge(self) -> str:
+        """Firmware edge spec arming a manual switch's press detector.
+
+        The "VI" prefix is what makes the pin argument select an ANALOG input,
+        and it arms a sample-to-sample STEP detector rather than a level
+        crossing: "VI+6" fires when one poll-to-poll sample jumps UP by more
+        than 6 V, i.e. the 0 -> 12 V press. The "@<poll_s>" suffix sets the
+        firmware poll rate (0.4 s when omitted), but older platform-interface
+        builds crash parsing it - so a configured 0.4 emits the bare legacy form
+        that every build understands.
+        """
+        threshold = self._manual_threshold()
+        poll = float(self.config.manual_poll_s.value or 0.4)
+        if poll == 0.4:
+            return f"VI+{threshold:g}"
+        return f"VI+{threshold:g}@{poll:g}"
+
+    def _manual_pins(self) -> dict[str, int]:
+        """Configured local switch pins, keyed by the direction each drives."""
+        pins: dict[str, int] = {}
+        for direction, element in (
+            ("raise", self.config.manual_raise_ai_pin),
+            ("lower", self.config.manual_lower_ai_pin),
+        ):
+            value = element.value
+            if value is not None:
+                pins[direction] = int(value)
+        return pins
+
+    def _manual_request(self) -> str | None:
+        """What the local switches are asking for right now."""
+        if self._manual_raise_active and self._manual_lower_active:
+            return "both"
+        if self._manual_raise_active:
+            return "raise"
+        if self._manual_lower_active:
+            return "lower"
+        return None
+
+    def _set_manual(self, raise_pressed: bool, lower_pressed: bool):
+        if raise_pressed != self._manual_raise_active:
+            log.info(
+                "Local manual RAISE switch %s",
+                "pressed" if raise_pressed else "released",
+            )
+        if lower_pressed != self._manual_lower_active:
+            log.info(
+                "Local manual LOWER switch %s",
+                "pressed" if lower_pressed else "released",
+            )
+        self._manual_raise_active = raise_pressed
+        self._manual_lower_active = lower_pressed
+
+    async def _refresh_manual_levels(self):
+        """Read the switch inputs and latch pressed/released from the levels.
+
+        The fail-safe direction here is RELEASED - the OPPOSITE of the top
+        limit's hold-last-state. The top limit BLOCKS an output, so an unknown
+        reading has to keep blocking; these switches DRIVE an output, so an
+        unknown reading has to stop driving. An input that moves the gate must
+        drop out the moment it can't be read.
+        """
+        pins = self._manual_pins()
+        threshold = self._manual_threshold()
+        if not pins or threshold <= 0:
+            # Local control isn't configured (or is disabled by a threshold that
+            # would read every level as pressed). Force RELEASED rather than just
+            # returning: a runtime config update that clears the pins while a
+            # switch reads pressed would otherwise leave the flag latched, and it
+            # is the flag - not the pin - that drives the gate.
+            self._set_manual(False, False)
+            return
+        directions = list(pins)
+        try:
+            levels = await self.platform_iface.fetch_ai(*pins.values())
+        except Exception as e:
+            log.warning("Manual switch read failed, releasing: %s", e)
+            self._set_manual(False, False)
+            return
+        if levels is None:
+            # fetch_ai soft-fails as None; "unknown" is never "pressed".
+            log.warning("Manual switch levels unavailable, releasing")
+            self._set_manual(False, False)
+            return
+        # One pin returns a bare float, several return a list.
+        levels = list(levels) if isinstance(levels, (list, tuple)) else [levels]
+        if len(levels) != len(directions):
+            # A short (or long) list can't be attributed to pins: zipping it
+            # would silently read one switch's level as the other's. Treat it as
+            # a failed read and release, like any other unusable answer.
+            log.warning(
+                "Manual switch read returned %d level(s) for %d pin(s), releasing",
+                len(levels),
+                len(directions),
+            )
+            self._set_manual(False, False)
+            return
+
+        pressed: dict[str, bool] = {}
+        for direction, level in zip(directions, levels):
+            try:
+                pressed[direction] = float(level) >= threshold
+            except (TypeError, ValueError):
+                log.warning(
+                    "Manual %s switch level unreadable (%r), releasing",
+                    direction,
+                    level,
+                )
+                pressed[direction] = False
+        self._set_manual(pressed.get("raise", False), pressed.get("lower", False))
+
+    async def _poll_manual_inputs(self):
+        """Level-poll the local switches each loop.
+
+        Both the backstop for a press pulse the stream dropped AND the only
+        release detector there is: one VI threshold per pin means a pin
+        streaming presses cannot also stream releases. Worst-case stop latency
+        is therefore one control period - the same as every other stop here.
+        """
+        await self._refresh_manual_levels()
+
+    async def _manual_control(self, direction):
+        """Jog the gate for as long as a local switch is held."""
+        if direction == "both":
+            # Resolved here, ahead of _write_outputs, so its hard guard - a
+            # last-resort assertion that logs an error - never sees an operator
+            # action, and so the status says what actually happened.
+            await self._stop("manual - both switches pressed")
+            return
+        if direction == "raise" and self._top_limit_active:
+            # _write_outputs would strip the raise anyway; resolving it here
+            # keeps the pump from being energised for nothing.
+            await self._stop("top limit reached - manual raise blocked")
+            return
+
+        if self._moving is not None:
+            # An auto move was underway: the operator has taken over. Drop its
+            # bookkeeping so the move timers can't carry across - but do NOT mark
+            # an idle transition the way _stop does. A manual jog moves the gate
+            # an arbitrary distance, so whatever auto does next is a FRESH move,
+            # never a hunting continuation of this one; leaving _idle_since set
+            # would have _begin_move keep the abandoned move's start time and
+            # fault the resumed move on a move timeout it never earned. The
+            # outputs are deliberately not written off - we're about to drive them.
+            self._moving = None
+            self._idle_since = None
+
+        # No _begin_move and no _check_move_safety on purpose: the move timeout
+        # and stall detector protect UNATTENDED auto moves, and both need a
+        # trusted height - which would fault instantly on the dead encoder that
+        # is one of the reasons local control exists. A held deadman switch with
+        # the operator watching the gate is its own protection.
+        await self._drive(direction)
+        self._status = (
+            "manual raise (local switch)"
+            if direction == "raise"
+            else "manual lower (local switch)"
+        )
+
+    async def _on_manual_pulse(self, di, di_value, dt_secs, count, edge):
+        """Fast path: start jogging on the press step, not a control period later.
+
+        ``di_value`` is never trusted - pydoover delivers the proto3 default
+        False on every driver (``_on_top_limit`` documents the same trap) and a
+        VI payload carries no analog level at all - so the levels are always
+        re-read.
+
+        This only ever STARTS a jog. If the refreshed levels show no request
+        (contact bounce, or a switch already let go by the time this runs) it
+        does nothing and leaves the loop to decide: stopping belongs to the
+        level poll, so the fast path can never fight the auto state machine.
+        """
+        await self._refresh_manual_levels()
+        request = self._manual_request()
+        if request is None:
+            return
+        if not self.config.outputs_enabled.value:
+            return
+        if request == "raise":
+            # The counters are armed in setup(), so a press can land before
+            # main_loop has ever polled the prox. Poll it here too, or the
+            # never-raise-onto-the-prox invariant would only hold from the first
+            # control period rather than from the first pulse.
+            await self._poll_top_limit()
+        await self._manual_control(request)
+
+    # ------------------------------------------------------------------
     # Inputs
     # ------------------------------------------------------------------
     def _read_raw_height(self):
@@ -536,6 +807,8 @@ class ChannelGateControlApplication(Application):
         await self.tags.LowerOutput.set(self._lower_state)
         await self.tags.PumpOutput.set(self._pump_state)
         await self.tags.TopLimitActive.set(self._top_limit_active)
+        await self.tags.ManualRaise.set(self._manual_raise_active)
+        await self.tags.ManualLower.set(self._manual_lower_active)
         await self.tags.Mode.set(mode)
         await self.tags.Status.set(self._status)
         await self.tags.Fault.set(self._fault)

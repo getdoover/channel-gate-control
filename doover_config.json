@@ -232,6 +232,64 @@
                     "default": 520.0,
                     "x-position": 15
                 },
+                "manual_raise_ai_pin": {
+                    "title": "Manual Raise AI Pin",
+                    "x-name": "manual_raise_ai_pin",
+                    "x-hidden": false,
+                    "type": [
+                        "integer",
+                        "null"
+                    ],
+                    "x-required": false,
+                    "description": "Analog input wired to the local momentary RAISE switch, which puts 12 V on the pin while it is held. Only AI0 and AI1 support the voltage-step detection that gives the press an immediate response. Local raising is opt-in: leave unset (the default) and it is disabled.",
+                    "default": null,
+                    "x-position": 16,
+                    "minimum": 0,
+                    "maximum": 1
+                },
+                "manual_lower_ai_pin": {
+                    "title": "Manual Lower AI Pin",
+                    "x-name": "manual_lower_ai_pin",
+                    "x-hidden": false,
+                    "type": [
+                        "integer",
+                        "null"
+                    ],
+                    "x-required": false,
+                    "description": "Analog input wired to the local momentary LOWER switch, which puts 12 V on the pin while it is held. Only AI0 and AI1 support the voltage-step detection that gives the press an immediate response. Local lowering is opt-in: leave unset (the default) and it is disabled.",
+                    "default": null,
+                    "x-position": 17,
+                    "minimum": 0,
+                    "maximum": 1
+                },
+                "manual_threshold_v": {
+                    "title": "Manual Switch Threshold (V)",
+                    "x-name": "manual_threshold_v",
+                    "x-hidden": false,
+                    "type": [
+                        "number",
+                        "null"
+                    ],
+                    "x-required": false,
+                    "description": "Voltage at or above which a local switch reads as pressed, and the sample-to-sample step the press detector is armed with. Default 6 V: half of the 12 V switch supply, so it clears cable droop and noise without missing a press. A threshold of 0 or below would read every input level as pressed, so it disables local control outright instead.",
+                    "default": 6.0,
+                    "x-position": 18,
+                    "minimum": 0.1
+                },
+                "manual_poll_s": {
+                    "title": "Manual Switch Poll (s)",
+                    "x-name": "manual_poll_s",
+                    "x-hidden": false,
+                    "type": [
+                        "number",
+                        "null"
+                    ],
+                    "x-required": false,
+                    "description": "How often the firmware samples the manual switch inputs looking for a press. 0.4 emits the legacy bare edge string, for older platform interfaces that cannot parse an explicit poll rate.",
+                    "default": 0.1,
+                    "x-position": 19,
+                    "minimum": 0.05
+                },
                 "outputs_enabled": {
                     "title": "Outputs Enabled",
                     "x-name": "outputs_enabled",
@@ -243,7 +301,7 @@
                     "x-required": false,
                     "description": "Master enable. When off, both solenoids are held de-energised regardless of the setpoint or mode.",
                     "default": true,
-                    "x-position": 16
+                    "x-position": 20
                 },
                 "move_timeout_s": {
                     "title": "Move Timeout (s)",
@@ -256,7 +314,7 @@
                     "x-required": false,
                     "description": "Maximum time a solenoid may be energised in a single continuous move before the app faults and stops. Set to the realistic full-travel time plus margin. 0 disables.",
                     "default": 30.0,
-                    "x-position": 17,
+                    "x-position": 21,
                     "minimum": 0
                 },
                 "stall_window_s": {
@@ -270,7 +328,7 @@
                     "x-required": false,
                     "description": "While moving, the gate must make progress within this window or the app faults (jam, dead encoder, or reversed wiring). 0 disables stall detection.",
                     "default": 4.0,
-                    "x-position": 18,
+                    "x-position": 22,
                     "minimum": 0
                 },
                 "stall_min_progress_mm": {
@@ -284,7 +342,7 @@
                     "x-required": false,
                     "description": "Minimum height change, in the commanded direction, expected within each stall window while moving.",
                     "default": 3.0,
-                    "x-position": 19,
+                    "x-position": 23,
                     "minimum": 0
                 }
             },
@@ -303,149 +361,221 @@
             "type": "uiApplication",
             "name": "$config.app().APP_KEY",
             "children": {
-                "target": {
-                    "name": "target",
-                    "type": "uiSlider",
-                    "displayString": "Target Height (mm)",
-                    "position": 51,
+                "tabs": {
+                    "name": "tabs",
+                    "type": "uiTabs",
+                    "displayString": "Gate Control",
+                    "showActivity": true,
+                    "position": 68,
                     "hidden": false,
-                    "currentValue": "$cmds.app().target::0",
-                    "default": 0,
-                    "min": 0,
-                    "max": 520,
-                    "stepSize": 1,
-                    "dualSlider": false,
-                    "isInverted": false
-                },
-                "mode": {
-                    "name": "mode",
-                    "type": "uiSelect",
-                    "displayString": "Control Mode",
-                    "position": 52,
-                    "hidden": false,
-                    "currentValue": "$cmds.app().mode::hold",
-                    "default": "hold",
-                    "options": {
-                        "hold": {
-                            "name": "hold",
-                            "displayString": "Hold",
-                            "type": "uiElement"
+                    "children": {
+                        "control_tab": {
+                            "name": "control_tab",
+                            "type": "uiContainer",
+                            "displayString": "Control",
+                            "showActivity": true,
+                            "position": 55,
+                            "hidden": false,
+                            "children": {
+                                "target": {
+                                    "name": "target",
+                                    "type": "uiSlider",
+                                    "displayString": "Target Height (mm)",
+                                    "position": 51,
+                                    "hidden": false,
+                                    "currentValue": "$cmds.app().target::0",
+                                    "default": 0,
+                                    "min": 0,
+                                    "max": 520,
+                                    "stepSize": 1,
+                                    "dualSlider": false,
+                                    "isInverted": false
+                                },
+                                "mode": {
+                                    "name": "mode",
+                                    "type": "uiSelect",
+                                    "displayString": "Control Mode",
+                                    "position": 52,
+                                    "hidden": false,
+                                    "currentValue": "$cmds.app().mode::hold",
+                                    "default": "hold",
+                                    "options": {
+                                        "hold": {
+                                            "name": "hold",
+                                            "displayString": "Hold",
+                                            "type": "uiElement"
+                                        },
+                                        "auto": {
+                                            "name": "auto",
+                                            "displayString": "Auto",
+                                            "type": "uiElement"
+                                        }
+                                    }
+                                },
+                                "height": {
+                                    "name": "height",
+                                    "type": "uiVariable",
+                                    "displayString": "Gate Height (mm)",
+                                    "showActivity": true,
+                                    "position": 53,
+                                    "hidden": false,
+                                    "varType": "float",
+                                    "currentValue": "$tag.app().GateHeight:number:0.0",
+                                    "decPrecision": 1,
+                                    "live": true
+                                },
+                                "height_offset": {
+                                    "name": "height_offset",
+                                    "type": "uiVariable",
+                                    "displayString": "Height Calibration (mm)",
+                                    "showActivity": true,
+                                    "position": 54,
+                                    "hidden": false,
+                                    "varType": "float",
+                                    "currentValue": "$tag.app().HeightOffset:number:0.0",
+                                    "decPrecision": 1,
+                                    "live": true
+                                }
+                            }
                         },
-                        "auto": {
-                            "name": "auto",
-                            "displayString": "Auto",
-                            "type": "uiElement"
+                        "diagnostics_tab": {
+                            "name": "diagnostics_tab",
+                            "type": "uiContainer",
+                            "displayString": "Diagnostics",
+                            "showActivity": true,
+                            "position": 67,
+                            "hidden": false,
+                            "children": {
+                                "target_readout": {
+                                    "name": "target_readout",
+                                    "type": "uiVariable",
+                                    "displayString": "Target (mm)",
+                                    "showActivity": true,
+                                    "position": 56,
+                                    "hidden": false,
+                                    "varType": "float",
+                                    "currentValue": "$tag.app().TargetHeight:number:0.0",
+                                    "decPrecision": 1,
+                                    "live": true
+                                },
+                                "error": {
+                                    "name": "error",
+                                    "type": "uiVariable",
+                                    "displayString": "Error (mm)",
+                                    "showActivity": true,
+                                    "position": 57,
+                                    "hidden": false,
+                                    "varType": "float",
+                                    "currentValue": "$tag.app().Error:number:0.0",
+                                    "decPrecision": 1,
+                                    "live": true
+                                },
+                                "moving": {
+                                    "name": "moving",
+                                    "type": "uiVariable",
+                                    "displayString": "Movement",
+                                    "showActivity": true,
+                                    "position": 58,
+                                    "hidden": false,
+                                    "varType": "string",
+                                    "currentValue": "$tag.app().Moving:string:\"idle\"",
+                                    "live": true
+                                },
+                                "status": {
+                                    "name": "status",
+                                    "type": "uiVariable",
+                                    "displayString": "Status",
+                                    "showActivity": true,
+                                    "position": 59,
+                                    "hidden": false,
+                                    "varType": "string",
+                                    "currentValue": "$tag.app().Status:string:\"starting\"",
+                                    "live": true
+                                },
+                                "raise_output": {
+                                    "name": "raise_output",
+                                    "type": "uiVariable",
+                                    "displayString": "Raise Solenoid",
+                                    "showActivity": true,
+                                    "position": 60,
+                                    "hidden": false,
+                                    "varType": "bool",
+                                    "currentValue": "$tag.app().RaiseOutput:boolean:false",
+                                    "live": true
+                                },
+                                "lower_output": {
+                                    "name": "lower_output",
+                                    "type": "uiVariable",
+                                    "displayString": "Lower Solenoid",
+                                    "showActivity": true,
+                                    "position": 61,
+                                    "hidden": false,
+                                    "varType": "bool",
+                                    "currentValue": "$tag.app().LowerOutput:boolean:false",
+                                    "live": true
+                                },
+                                "pump_output": {
+                                    "name": "pump_output",
+                                    "type": "uiVariable",
+                                    "displayString": "Pump",
+                                    "showActivity": true,
+                                    "position": 62,
+                                    "hidden": false,
+                                    "varType": "bool",
+                                    "currentValue": "$tag.app().PumpOutput:boolean:false",
+                                    "live": true
+                                },
+                                "manual_raise": {
+                                    "name": "manual_raise",
+                                    "type": "uiVariable",
+                                    "displayString": "Manual Up Switch",
+                                    "showActivity": true,
+                                    "position": 63,
+                                    "hidden": false,
+                                    "varType": "bool",
+                                    "currentValue": "$tag.app().ManualRaise:boolean:false",
+                                    "live": true
+                                },
+                                "manual_lower": {
+                                    "name": "manual_lower",
+                                    "type": "uiVariable",
+                                    "displayString": "Manual Down Switch",
+                                    "showActivity": true,
+                                    "position": 64,
+                                    "hidden": false,
+                                    "varType": "bool",
+                                    "currentValue": "$tag.app().ManualLower:boolean:false",
+                                    "live": true
+                                },
+                                "fault_reason": {
+                                    "name": "fault_reason",
+                                    "type": "uiVariable",
+                                    "displayString": "Fault Reason",
+                                    "showActivity": true,
+                                    "position": 65,
+                                    "hidden": false,
+                                    "varType": "string",
+                                    "currentValue": "$tag.app().FaultReason:string:\"\"",
+                                    "live": true
+                                },
+                                "reset_fault": {
+                                    "name": "reset_fault",
+                                    "type": "uiButton",
+                                    "displayString": "Reset Fault",
+                                    "position": 66,
+                                    "hidden": false,
+                                    "colour": "red",
+                                    "currentValue": "$cmds.app().reset_fault"
+                                }
+                            }
                         }
                     }
-                },
-                "height": {
-                    "name": "height",
-                    "type": "uiVariable",
-                    "displayString": "Gate Height (mm)",
-                    "showActivity": true,
-                    "position": 53,
-                    "hidden": false,
-                    "varType": "float",
-                    "currentValue": "$tag.app().GateHeight:number:0.0",
-                    "decPrecision": 1,
-                    "live": true
-                },
-                "target_readout": {
-                    "name": "target_readout",
-                    "type": "uiVariable",
-                    "displayString": "Target (mm)",
-                    "showActivity": true,
-                    "position": 54,
-                    "hidden": false,
-                    "varType": "float",
-                    "currentValue": "$tag.app().TargetHeight:number:0.0",
-                    "decPrecision": 1,
-                    "live": true
-                },
-                "error": {
-                    "name": "error",
-                    "type": "uiVariable",
-                    "displayString": "Error (mm)",
-                    "showActivity": true,
-                    "position": 55,
-                    "hidden": false,
-                    "varType": "float",
-                    "currentValue": "$tag.app().Error:number:0.0",
-                    "decPrecision": 1,
-                    "live": true
-                },
-                "height_offset": {
-                    "name": "height_offset",
-                    "type": "uiVariable",
-                    "displayString": "Height Calibration (mm)",
-                    "showActivity": true,
-                    "position": 56,
-                    "hidden": false,
-                    "varType": "float",
-                    "currentValue": "$tag.app().HeightOffset:number:0.0",
-                    "decPrecision": 1,
-                    "live": true
-                },
-                "moving": {
-                    "name": "moving",
-                    "type": "uiVariable",
-                    "displayString": "Movement",
-                    "showActivity": true,
-                    "position": 57,
-                    "hidden": false,
-                    "varType": "string",
-                    "currentValue": "$tag.app().Moving:string:\"idle\"",
-                    "live": true
-                },
-                "status": {
-                    "name": "status",
-                    "type": "uiVariable",
-                    "displayString": "Status",
-                    "showActivity": true,
-                    "position": 58,
-                    "hidden": false,
-                    "varType": "string",
-                    "currentValue": "$tag.app().Status:string:\"starting\"",
-                    "live": true
-                },
-                "raise_output": {
-                    "name": "raise_output",
-                    "type": "uiVariable",
-                    "displayString": "Raise Solenoid",
-                    "showActivity": true,
-                    "position": 59,
-                    "hidden": false,
-                    "varType": "bool",
-                    "currentValue": "$tag.app().RaiseOutput:boolean:false",
-                    "live": true
-                },
-                "lower_output": {
-                    "name": "lower_output",
-                    "type": "uiVariable",
-                    "displayString": "Lower Solenoid",
-                    "showActivity": true,
-                    "position": 60,
-                    "hidden": false,
-                    "varType": "bool",
-                    "currentValue": "$tag.app().LowerOutput:boolean:false",
-                    "live": true
-                },
-                "pump_output": {
-                    "name": "pump_output",
-                    "type": "uiVariable",
-                    "displayString": "Pump",
-                    "showActivity": true,
-                    "position": 61,
-                    "hidden": false,
-                    "varType": "bool",
-                    "currentValue": "$tag.app().PumpOutput:boolean:false",
-                    "live": true
                 },
                 "no_signal": {
                     "name": "no_signal",
                     "type": "uiWarningIndicator",
                     "displayString": "No gate height signal - outputs held",
-                    "position": 62,
+                    "position": 69,
                     "hidden": true,
                     "currentValue": "$cmds.app().no_signal",
                     "can_cancel": false
@@ -454,7 +584,7 @@
                     "name": "height_untrusted",
                     "type": "uiWarningIndicator",
                     "displayString": "Encoder height not trusted (unhomed/stale) - outputs held",
-                    "position": 63,
+                    "position": 70,
                     "hidden": true,
                     "currentValue": "$cmds.app().height_untrusted",
                     "can_cancel": false
@@ -463,7 +593,7 @@
                     "name": "top_limit",
                     "type": "uiWarningIndicator",
                     "displayString": "TOP LIMIT - raising blocked, lower the gate off the prox",
-                    "position": 64,
+                    "position": 71,
                     "hidden": true,
                     "currentValue": "$cmds.app().top_limit",
                     "can_cancel": false
@@ -472,30 +602,10 @@
                     "name": "fault",
                     "type": "uiWarningIndicator",
                     "displayString": "FAULT - outputs latched off, press Reset",
-                    "position": 65,
+                    "position": 72,
                     "hidden": true,
                     "currentValue": "$cmds.app().fault",
                     "can_cancel": false
-                },
-                "fault_reason": {
-                    "name": "fault_reason",
-                    "type": "uiVariable",
-                    "displayString": "Fault Reason",
-                    "showActivity": true,
-                    "position": 66,
-                    "hidden": false,
-                    "varType": "string",
-                    "currentValue": "$tag.app().FaultReason:string:\"\"",
-                    "live": true
-                },
-                "reset_fault": {
-                    "name": "reset_fault",
-                    "type": "uiButton",
-                    "displayString": "Reset Fault",
-                    "position": 67,
-                    "hidden": false,
-                    "colour": "red",
-                    "currentValue": "$cmds.app().reset_fault"
                 }
             }
         },

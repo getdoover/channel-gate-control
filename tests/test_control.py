@@ -26,15 +26,31 @@ def _cfg(**kw):
 
 
 class FakePlatform:
-    def __init__(self, di_level=0):
+    def __init__(self, di_level=0, ai_levels=None):
         self.calls = []
         self.di_level = di_level  # what fetch_di returns for the top-limit poll
+        # Volts per analog pin, for the local manual switches. Tests press a
+        # switch by writing 12.0 here and release it by writing 0.0.
+        self.ai_levels = dict(ai_levels or {})
+        self.ai_reads = []
+        self.counters = []
 
     async def set_do(self, do, value):  # the REAL pydoover method name
         self.calls.append((do, value))
 
     async def fetch_di(self, *di):
         return self.di_level
+
+    async def fetch_ai(self, *ai):
+        """Match the real contract: bare float for one pin, list for several."""
+        self.ai_reads.append(tuple(ai))
+        levels = [float(self.ai_levels.get(pin, 0.0)) for pin in ai]
+        return levels[0] if len(levels) == 1 else levels
+
+    def get_new_pulse_counter(self, di, edge="rising", callback=None, **kwargs):
+        counter = SimpleNamespace(pin=di, edge=edge, callback=callback, kwargs=kwargs)
+        self.counters.append(counter)
+        return counter
 
 
 class FakeTag:
@@ -55,6 +71,9 @@ def _app_with(platform, **cfg):
     app._top_limit_active = False
     app._height_offset = 0.0
     app._limit_calibrated = False
+    # No local switch held: what the app's own __init__ starts from.
+    app._manual_raise_active = False
+    app._manual_lower_active = False
     app.platform_iface = platform
     cfg.setdefault("pump_do_pin", None)
     app.config = _cfg(**cfg)
