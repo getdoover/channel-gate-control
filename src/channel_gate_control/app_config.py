@@ -181,18 +181,20 @@ class ChannelGateControlConfig(config.Schema):
     # Analog rather than digital because these are the pins the switch is wired
     # to, and because a voltage threshold tolerates the long field run's droop.
     #
-    # Both pins default to unset - local control is OPT-IN. A numeric default
-    # would be backfilled into every already-deployed install that has no such
-    # key, silently arming an input that drives the gate above the fault latch
-    # on sites where nothing is wired to it.
+    # The pins default to AI0/AI1 - the standard wiring for this gate - which
+    # means local control is armed on ANY install whose config doesn't say
+    # otherwise, including already-deployed ones the defaults are backfilled
+    # into on upgrade. Deliberate: every gate ships with the switch fitted. A
+    # site with something else on AI0/AI1 must set the pins to null explicitly.
     manual_raise_ai_pin = config.Integer(
         "Manual Raise AI Pin",
         name="manual_raise_ai_pin",
         description="Analog input wired to the local momentary RAISE switch, "
         "which puts 12 V on the pin while it is held. Only AI0 and AI1 support "
         "the voltage-step detection that gives the press an immediate response. "
-        "Local raising is opt-in: leave unset (the default) and it is disabled.",
-        default=None,
+        "Default AI0, the standard wiring. Set to null ONLY if no raise switch "
+        "is fitted - anything else putting 6 V+ on the pin will raise the gate.",
+        default=0,
         minimum=0,
         maximum=1,
     )
@@ -202,8 +204,9 @@ class ChannelGateControlConfig(config.Schema):
         description="Analog input wired to the local momentary LOWER switch, "
         "which puts 12 V on the pin while it is held. Only AI0 and AI1 support "
         "the voltage-step detection that gives the press an immediate response. "
-        "Local lowering is opt-in: leave unset (the default) and it is disabled.",
-        default=None,
+        "Default AI1, the standard wiring. Set to null ONLY if no lower switch "
+        "is fitted - anything else putting 6 V+ on the pin will lower the gate.",
+        default=1,
         minimum=0,
         maximum=1,
     )

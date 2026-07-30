@@ -241,8 +241,8 @@
                         "null"
                     ],
                     "x-required": false,
-                    "description": "Analog input wired to the local momentary RAISE switch, which puts 12 V on the pin while it is held. Only AI0 and AI1 support the voltage-step detection that gives the press an immediate response. Local raising is opt-in: leave unset (the default) and it is disabled.",
-                    "default": null,
+                    "description": "Analog input wired to the local momentary RAISE switch, which puts 12 V on the pin while it is held. Only AI0 and AI1 support the voltage-step detection that gives the press an immediate response. Default AI0, the standard wiring. Set to null ONLY if no raise switch is fitted - anything else putting 6 V+ on the pin will raise the gate.",
+                    "default": 0,
                     "x-position": 16,
                     "minimum": 0,
                     "maximum": 1
@@ -256,8 +256,8 @@
                         "null"
                     ],
                     "x-required": false,
-                    "description": "Analog input wired to the local momentary LOWER switch, which puts 12 V on the pin while it is held. Only AI0 and AI1 support the voltage-step detection that gives the press an immediate response. Local lowering is opt-in: leave unset (the default) and it is disabled.",
-                    "default": null,
+                    "description": "Analog input wired to the local momentary LOWER switch, which puts 12 V on the pin while it is held. Only AI0 and AI1 support the voltage-step detection that gives the press an immediate response. Default AI1, the standard wiring. Set to null ONLY if no lower switch is fitted - anything else putting 6 V+ on the pin will lower the gate.",
+                    "default": 1,
                     "x-position": 17,
                     "minimum": 0,
                     "maximum": 1

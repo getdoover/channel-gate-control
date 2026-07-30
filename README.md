@@ -83,11 +83,12 @@ for up, `manual_lower_ai_pin` for down. While it's held the gate jogs that way; 
 release it stops. Only **AI0** and **AI1** can do this (they're the pins that
 support the voltage-step detection), so both keys are capped at `1`.
 
-**It is opt-in.** Both pins default to *unset*, and each direction is disabled
-until its pin is configured — nothing here arms itself. That's deliberate: the
-platform backfills schema defaults into deployments that don't carry the key, so
-a numeric default would have armed a gate-driving input, above the fault latch,
-on every install already in the field.
+**It is armed by default** — AI0 for raise, AI1 for lower, the standard wiring
+for this gate. The platform backfills schema defaults into deployments that
+don't carry the keys, so on upgrade every install gets local control on AI0/AI1
+without a config change. If a site has no switch fitted (or something else wired
+to those pins), set the pin to `null` explicitly: anything putting 6 V+ on an
+armed pin will move the gate, above the fault latch.
 
 - **It outranks a latched fault**, on purpose. The switch is the on-site recovery
   path: it has to work in exactly the situations Auto refuses to move in — dead
@@ -165,9 +166,8 @@ Then open the app in the Doover UI:
 
 The gate starts at 400 mm with 1000 mm of travel at 80 mm/s (tunable in
 `simulators/docker-compose.yml`). Mode defaults to **Hold** so nothing moves
-until you deliberately switch to Auto. The sim config deliberately arms the local
-switches on AI0/AI1 (they're opt-in everywhere else) so the manual path can be
-exercised on the bench.
+until you deliberately switch to Auto. The local switches are armed on AI0/AI1
+(the defaults) so the manual path can be exercised on the bench.
 
 ## Configuration
 
@@ -187,7 +187,7 @@ exercised on the bench.
 | `estop_di_pin` | — | Digital input from the top limit prox. Unset ⇒ not fitted. |
 | `estop_active_low` | `false` | Clear for a normally-open prox (active HIGH), set for normally-closed. |
 | `estop_height_mm` | `520` | Gate height the prox sits at — the calibration datum the height is re-zeroed to. |
-| `manual_raise_ai_pin` / `manual_lower_ai_pin` | — | Analog inputs the local momentary raise / lower switches feed 12 V into. AI0/AI1 only (`0`–`1`). Opt-in: unset ⇒ that direction has no local control. |
+| `manual_raise_ai_pin` / `manual_lower_ai_pin` | `0` / `1` | Analog inputs the local momentary raise / lower switches feed 12 V into. AI0/AI1 only (`0`–`1`). Armed by default; set to `null` if no switch is fitted on that direction. |
 | `manual_threshold_v` | `6` | Volts at which a local switch reads as pressed, and the step the press detector is armed with. `0` or below disables local control rather than reading every level as pressed. |
 | `manual_poll_s` | `0.1` | Firmware sample rate for the switch inputs. `0.4` emits the legacy bare edge string. |
 | `outputs_enabled` | `true` | Master enable; off ⇒ both solenoids held de-energised (the only gate above local control). |

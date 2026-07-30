@@ -57,20 +57,23 @@ async def _manual_app(plat, height=400.0, target=400.0, mode="hold", homed=True,
 # ----------------------------------------------------------------------
 # Registration
 # ----------------------------------------------------------------------
-def test_the_switch_pins_default_to_unset():
-    """Local control has to be opt-in, per install.
+def test_the_switch_pins_default_to_the_standard_wiring():
+    """Local control is armed by default on AI0 (raise) / AI1 (lower).
 
-    pydoover backfills schema defaults for keys an already-deployed config
-    doesn't carry, so a numeric default here would arm a gate-driving input -
-    one that sits ABOVE the fault latch - on every existing install, with
-    nothing wired to the pin.
+    Every gate ships with the switch fitted, so the standard wiring is the
+    default - and pydoover backfills schema defaults for keys an already-
+    deployed config doesn't carry, which arms local control on upgrade too.
+    The flip side is that a site with anything ELSE on AI0/AI1 must set the
+    pins to null explicitly: an armed pin drives the gate above the fault
+    latch. That trade was made knowingly; None stays expressible as "no
+    switch fitted".
     """
     from channel_gate_control.app_config import ChannelGateControlConfig
 
     cfg = ChannelGateControlConfig()
+    assert cfg.manual_raise_ai_pin.default == 0
+    assert cfg.manual_lower_ai_pin.default == 1
     for element in (cfg.manual_raise_ai_pin, cfg.manual_lower_ai_pin):
-        assert element.default is None
-        assert element.value is None
         # Only AI0/AI1 can do the voltage-step press detection.
         assert element.maximum == 1
 
@@ -106,7 +109,7 @@ async def test_default_poll_rate_emits_the_legacy_bare_edge_string():
 
 
 async def test_unset_pins_disable_manual_control_entirely():
-    """Both pins default to unset, so local control is opt-in."""
+    """Null pins mean "no switch fitted": nothing armed, nothing polled."""
     plat = FakePlatform()
     app, _ = await _manual_app(plat, manual_raise_ai_pin=None, manual_lower_ai_pin=None)
     await app.setup()
