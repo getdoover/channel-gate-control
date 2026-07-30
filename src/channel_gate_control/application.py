@@ -103,6 +103,20 @@ class ChannelGateControlApplication(Application):
     # ------------------------------------------------------------------
     async def setup(self):
         self.loop_target_period = float(self.config.control_period_s.value or 0.25)
+
+        # Event-driven fast stop. The encoder publishes
+        # Height every 0.25 s; reacting in the tag callback cuts the outputs
+        # within one publish of reaching the target instead of waiting for the
+        # (slower) control loop to come around.
+        try:
+            self.subscribe_to_tag(
+                self.config.height_tag_name.value or "Height",
+                self._on_height_tag,
+                app_key=self.config.height_app_key.value,
+            )
+            log.info("Fast-stop height subscription active")
+        except Exception as e:
+            log.warning("Fast-stop height subscription failed: %s", e)
         # Establish a known-safe output state before any control runs. Important
         # for active-low wiring, where an undriven pin reads as energised.
         await self._write_outputs(False, False)
@@ -201,6 +215,7 @@ class ChannelGateControlApplication(Application):
             self._zero_at_top_limit(raw_height)
 
         height = None if raw_height is None else raw_height + self._height_offset
+        self._last_calibrated_height = height
         target = self._read_target()
         mode = self._read_mode()
         trust_issue = self._height_trust_issue() if height is not None else None
@@ -224,8 +239,20 @@ class ChannelGateControlApplication(Application):
         # it. The latch itself is untouched: auto stays off until Reset.
         manual = self._manual_request()
         if manual is not None:
+            # The INSTANT a local switch is pressed the
+            # mode drops to Hold - the operator taking over must silence auto
+            # immediately, not after they let go.
+            if not getattr(self, "_manual_hold_pushed", False):
+                self._manual_hold_pushed = True
+                if self._read_mode() != "hold":
+                    log.info("Manual switch pressed - switching mode to Hold")
+                    try:
+                        await self.ui.mode.set("hold")
+                    except Exception as e:
+                        log.warning("Failed to push mode to hold: %s", e)
             await self._manual_control(manual)
             return
+        self._manual_hold_pushed = False
 
         if self._fault:
             await self._stop(f"FAULT: {self._fault_reason}")
@@ -274,8 +301,9 @@ class ChannelGateControlApplication(Application):
                 return
             self._begin_move("raise" if error > 0 else "lower", height)
         else:
-            # Moving: stop as soon as we're inside the deadband...
-            if abs(error) <= deadband:
+            # Moving: command the stop EARLY (the larger of stop-early and
+            # the deadband) so shutoff lag + coast land the gate on target.
+            if abs(error) <= max(deadband, self._stop_early_mm()):
                 await self._stop("at target")
                 return
             # ...or if we've reached/overshot and the error flipped direction.
@@ -387,6 +415,22 @@ class ChannelGateControlApplication(Application):
             log.warning("Raise blocked: top limit prox active")
             raise_on = False
 
+        # Software travel ceiling. At/above the
+        # configured max height the gate may only be lowered - blocks manual
+        # and auto raising alike (every drive passes through here).
+        if raise_on:
+            try:
+                max_h = float(self.config.height_max_mm.value or 0.0)
+                h = getattr(self, "_last_calibrated_height", None)
+                if max_h > 0 and h is not None and h >= max_h:
+                    log.warning(
+                        "Raise blocked: gate at max height (%.1f >= %.1f mm)",
+                        h, max_h,
+                    )
+                    raise_on = False
+            except (TypeError, ValueError, AttributeError):
+                pass
+
         pump_on = raise_on or lower_on
         raise_on, lower_on = self._apply_pump_lead(pump_on, raise_on, lower_on)
 
@@ -415,6 +459,73 @@ class ChannelGateControlApplication(Application):
         self._raise_state = raise_on
         self._lower_state = lower_on
         self._pump_state = pump_on
+
+        # The encoder cannot read direction from the
+        # DI timing on this hardware, so the commanding side declares it.
+        try:
+            self._push_direction_hint(raise_on, lower_on)
+        except Exception as e:
+            log.debug("direction hint push failed: %s", e)
+
+    _HINT_URL = "http://127.0.0.1:8765/direction_hint"
+    _HINT_COAST_S = 1.2  # keep the old sign while the wheel decelerates
+
+    def _push_direction_hint(self, raise_on: bool, lower_on: bool):
+        """Tell the encoder which way we are commanding the gate.
+
+        raise -> "cw" (count/height increasing), lower -> "ccw", stopped ->
+        "none" pushed after a coast window so deceleration edges keep the
+        sign of the move that produced them. Failures are logged and ignored:
+        the hint is an aid to the encoder, never a gate on control.
+        """
+        import asyncio
+        import json as _json
+        import urllib.request
+
+        word = "cw" if raise_on else ("ccw" if lower_on else "none")
+        if word == getattr(self, "_hint_word", None):
+            return
+        self._hint_word = word
+        self._hint_gen = getattr(self, "_hint_gen", 0) + 1
+        gen = self._hint_gen
+
+        def _post(w):
+            # One sendall for the WHOLE request: the encoder's debug server
+            # does a single read(), and urllib's separate header/body writes
+            # race it - the body is intermittently missed and the hint lands
+            # as "none". A single write always arrives in one segment on
+            # loopback.
+            import socket as _socket
+
+            body = _json.dumps({"direction": w}).encode()
+            req = (
+                b"POST /direction_hint HTTP/1.1\r\n"
+                b"host: 127.0.0.1\r\n"
+                b"content-type: application/json\r\n"
+                + f"content-length: {len(body)}\r\n".encode()
+                + b"connection: close\r\n\r\n"
+                + body
+            )
+            with _socket.create_connection(("127.0.0.1", 8765), timeout=2) as s:
+                s.sendall(req)
+                resp = s.recv(256)
+            if b" 200 " not in resp.split(b"\r\n", 1)[0]:
+                raise RuntimeError(f"hint endpoint returned: {resp[:60]!r}")
+
+        loop = asyncio.get_running_loop()
+
+        async def _send():
+            if word == "none":
+                await asyncio.sleep(self._HINT_COAST_S)
+                if self._hint_gen != gen:
+                    return  # a new move started during the coast window
+            try:
+                await loop.run_in_executor(None, _post, word)
+                log.info("direction hint -> %s", word)
+            except Exception as e:
+                log.warning("direction hint POST failed: %s", e)
+
+        asyncio.create_task(_send())
 
     def _apply_pump_lead(self, pump_on: bool, raise_on: bool, lower_on: bool):
         """Hold the directional valve off until the pump has led by `pump_lead_s`.
@@ -648,8 +759,40 @@ class ChannelGateControlApplication(Application):
                 "Local manual LOWER switch %s",
                 "pressed" if lower_pressed else "released",
             )
+        was_held = self._manual_raise_active or self._manual_lower_active
         self._manual_raise_active = raise_pressed
         self._manual_lower_active = lower_pressed
+        if (raise_pressed or lower_pressed) and not was_held:
+            self._ensure_release_watcher()
+
+    # Fast release detection. A VI- (falling step)
+    # counter can't be armed - the firmware holds ONE threshold config per VI
+    # pin and arming release would clobber the press detector - so instead a
+    # dedicated task polls the switch LEVELS at the firmware's own 0.1 s VI
+    # cadence while a switch is held, and cuts the outputs the moment both
+    # read released. Inherits _refresh_manual_levels' fail-safe: an unreadable
+    # level counts as released, which now also stops the gate immediately.
+    def _ensure_release_watcher(self):
+        import asyncio
+
+        task = getattr(self, "_release_watcher", None)
+        if task is None or task.done():
+            self._release_watcher = asyncio.create_task(self._watch_manual_release())
+
+    async def _watch_manual_release(self):
+        import asyncio
+
+        try:
+            while self._manual_raise_active or self._manual_lower_active:
+                await asyncio.sleep(0.1)
+                await self._refresh_manual_levels()
+            await self._stop("manual released")
+        except Exception as e:
+            log.warning("Manual release watcher failed (stopping outputs): %s", e)
+            try:
+                await self._write_outputs(False, False)
+            except Exception:
+                pass
 
     async def _refresh_manual_levels(self):
         """Read the switch inputs and latch pressed/released from the levels.
@@ -790,6 +933,31 @@ class ChannelGateControlApplication(Application):
     # ------------------------------------------------------------------
     # Inputs
     # ------------------------------------------------------------------
+    async def _on_height_tag(self, _tag_key, value):
+        """Fast-stop: cut outputs the moment an auto move is inside the deadband.
+
+        Runs on every Height tag update from the encoder (0.25 s), so the stop
+        happens within one publish of reaching target rather than one control
+        loop. Only acts on auto moves this app itself started (_moving set,
+        mode auto); manual holds and idle states are untouched. The main loop
+        remains the authority for everything else - this only ever STOPS.
+        """
+        try:
+            if self._moving not in ("raise", "lower"):
+                return
+            if value is None or self._read_mode() != "auto":
+                return
+            height = float(value) + self._height_offset
+            self._last_calibrated_height = height
+            target = self._read_target()
+            deadband = float(self.config.deadband_mm.value or 0.0)
+            if abs(target - height) <= max(deadband, self._stop_early_mm()):
+                await self._stop(
+                    f"at target ({height:.0f} mm, fast path)"
+                )
+        except Exception as e:
+            log.debug("fast-stop height check failed: %s", e)
+
     def _read_raw_height(self):
         """The encoder's height, as published, before calibration is applied."""
         try:
@@ -831,6 +999,17 @@ class ChannelGateControlApplication(Application):
             if age > timeout:
                 return f"encoder signal stale ({age:.0f}s old)"
         return None
+
+    def _stop_early_mm(self) -> float:
+        """How many mm before the target the stop is commanded in Auto.
+
+        Valve/pump shutoff lag plus coasting carries the gate past where the
+        stop was ISSUED; commanding it early lands the gate ON the target.
+        """
+        try:
+            return float(self.config.stop_early_mm.value)
+        except (TypeError, ValueError, AttributeError):
+            return 8.0
 
     def _read_target(self):
         lo, hi = self.config.height_span
@@ -895,6 +1074,16 @@ class ChannelGateControlApplication(Application):
         self.ui.untrusted_warning.hidden = trust_issue is None
         self.ui.top_limit_warning.hidden = not self._top_limit_active
         self.ui.fault_warning.hidden = not self._fault
+        # Put the actual reason in the banner so a
+        # latched fault is self-explanatory from either tab.
+        if self._fault and self._fault_reason:
+            self.ui.fault_warning.display_name = (
+                f"FAULT: {self._fault_reason} - outputs latched off, press Reset"
+            )
+        else:
+            self.ui.fault_warning.display_name = (
+                "FAULT - outputs latched off, press Reset"
+            )
 
     # ------------------------------------------------------------------
     # Field actions

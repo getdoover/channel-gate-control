@@ -129,6 +129,15 @@ class ChannelGateControlConfig(config.Schema):
         default=5.0,
         minimum=0,
     )
+    stop_early_mm = config.Number(
+        "Auto Stop-Early (mm)",
+        name="stop_early_mm",
+        description="In Auto, command the stop this many mm BEFORE the target "
+        "so valve/pump shutoff lag and coasting land the gate ON the target "
+        "rather than past it. The larger of this and the deadband applies.",
+        default=8.0,
+        minimum=0,
+    )
     hysteresis_mm = config.Number(
         "Re-engage Hysteresis (mm)",
         name="hysteresis_mm",
